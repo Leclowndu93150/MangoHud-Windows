@@ -2,6 +2,7 @@
 #include "kiero.h"
 #include <vector>
 #include "win_shared.h"
+#include "../blacklist.h"
 #if KIERO_INCLUDE_D3D11
 # include "d3d11_hook.h"
 #endif
@@ -55,6 +56,9 @@ void renderTypes() {
 
 int MainThread()
 {
+    if (is_blacklisted())
+        return 0;
+
     ConsoleSetup();
     printf("MangoHud Attached!\n");
     renderTypes();

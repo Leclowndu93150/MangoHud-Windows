@@ -4,6 +4,7 @@
 #include <vector>
 #include "../win/kiero.h"
 #include "../win/win_shared.h"
+#include "../blacklist.h"
 
 #if KIERO_INCLUDE_D3D11
 #include "../win/d3d11_hook.h"
@@ -12,9 +13,9 @@
 #include "../win/d3d12_hook.h"
 #endif
 
-// Real dxgi.dll handle
 static HMODULE s_realDXGI = nullptr;
 static bool s_hooksInited = false;
+static bool s_initFailed = false;
 
 static void ensureRealDXGI() {
     if (s_realDXGI) return;
@@ -24,38 +25,52 @@ static void ensureRealDXGI() {
     s_realDXGI = LoadLibraryA(path.c_str());
 }
 
-static void initOverlayHooks() {
-    if (s_hooksInited) return;
-    s_hooksInited = true;
+static DWORD WINAPI initOverlayThread(LPVOID) {
+    // Wait a bit for the game to fully initialize its graphics
+    Sleep(2000);
 
-    // Detect render types and init hooks (same logic as win/main.cpp)
-    std::vector<kiero::RenderType::Enum> types;
-    if (GetModuleHandleA("d3d11.dll"))
-        types.push_back(kiero::RenderType::D3D11);
-    if (GetModuleHandleA("d3d12.dll"))
-        types.push_back(kiero::RenderType::D3D12);
+    if (is_blacklisted()) return 0;
 
-    for (auto& t : types)
-        kiero::init(t);
+    try {
+        std::vector<kiero::RenderType::Enum> types;
+        if (GetModuleHandleA("d3d11.dll"))
+            types.push_back(kiero::RenderType::D3D11);
+        if (GetModuleHandleA("d3d12.dll"))
+            types.push_back(kiero::RenderType::D3D12);
 
-    if (!types.empty()) {
+        for (auto& t : types)
+            kiero::init(t);
+
+        if (!types.empty()) {
 #if KIERO_INCLUDE_D3D11
-        impl::d3d11::init();
+            impl::d3d11::init();
 #endif
 #if KIERO_INCLUDE_D3D12
-        impl::d3d12::init();
+            impl::d3d12::init();
 #endif
+        }
+    } catch (...) {
+        s_initFailed = true;
     }
+
+    return 0;
 }
 
-// Helper to get a function from the real dxgi.dll
+static void initOverlayHooks() {
+    if (s_hooksInited || s_initFailed) return;
+    s_hooksInited = true;
+
+    // Do the actual hooking on a background thread so we don't block the game's
+    // renderer initialization. The game needs its DXGI factory returned ASAP.
+    CreateThread(NULL, 0, initOverlayThread, NULL, 0, NULL);
+}
+
 template<typename T>
 static T getRealProc(const char* name) {
     ensureRealDXGI();
+    if (!s_realDXGI) return nullptr;
     return (T)GetProcAddress(s_realDXGI, name);
 }
-
-// Exported functions that forward to real dxgi.dll
 
 typedef HRESULT (WINAPI *PFN_CreateDXGIFactory)(REFIID, void**);
 typedef HRESULT (WINAPI *PFN_CreateDXGIFactory1)(REFIID, void**);

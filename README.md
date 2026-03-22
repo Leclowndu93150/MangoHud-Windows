@@ -141,9 +141,14 @@ HKLM\SOFTWARE\Khronos\Vulkan\ImplicitLayers
 ```
 Add the full path to `MangoHud.<arch>.json` with a DWORD value of `0`.
 
-### DirectX 11/12 Games (Easy Way - MangoJuice)
+### All Games (Easy Way - MangoJuice)
 
-Use **MangoJuice** (included, see below) to manage your games. Just add your game, click "Enable", done. MangoJuice copies a DXGI proxy DLL next to the game executable. The game loads it automatically on startup, no injection, no admin rights, no anti-cheat issues. This is the same approach used by ReShade and SpecialK.
+Use **MangoJuice** (included, see below) to manage everything. It handles both DirectX and Vulkan games:
+
+- **DirectX games**: Add your game, click "Enable". MangoJuice copies a DXGI proxy DLL next to the game executable. The game loads it automatically on startup. Same approach used by ReShade and SpecialK.
+- **Vulkan games** (CS2, Doom, etc): Click "Register Vulkan Layer" in the Games tab. This registers the MangoHud Vulkan implicit layer in the Windows Registry and sets `MANGOHUD=1` system-wide. All Vulkan games will show the overlay after that.
+
+MangoJuice requests **administrator privileges** on startup because writing to the Vulkan layer registry key (`HKLM\SOFTWARE\Khronos\Vulkan\ImplicitLayers`) and setting system environment variables requires it. This is a one-time setup. The DirectX proxy DLL deployment does not need admin.
 
 ### DirectX 11/12 Games (Manual)
 
@@ -162,9 +167,11 @@ MangoJuice is the graphical configuration tool for MangoHud. It's included as a 
 Features:
 - Full MangoHud configuration editor (GPU, CPU, memory, battery, visual settings, colors, keybinds, logging)
 - **Game Manager**: add games, enable/disable the overlay per-game with one click
+- **Vulkan layer registration**: one-click setup for Vulkan games (registers the implicit layer in the Windows Registry)
 - Profile/preset management
 - vkBasalt configuration
-- Live preview of settings
+
+MangoJuice requests admin privileges on startup to be able to register the Vulkan layer (HKLM registry write) and set system environment variables. The UAC prompt appears once when you launch it.
 
 ### Building MangoJuice (requires MSYS2)
 

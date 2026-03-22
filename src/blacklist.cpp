@@ -65,6 +65,9 @@ static  std::vector<std::string> blacklist {
     "UplayWebCore.exe",
     "vrcompositor",
     "vulkandriverquery",
+    "mangojuice.exe",
+    "MangoJuice.exe",
+    "MangoHudManager.exe",
 };
 
 static std::vector<std::string> blacklist_engine {
