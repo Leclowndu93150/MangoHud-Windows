@@ -12,18 +12,18 @@
 #include <regex>
 #include <iostream>
 #include <array>
-#include "amdgpu.h"
 #include "nvidia.h"
+#include "adl.h"
+#include "dxgi_gpu.h"
 #include "gpu_metrics_util.h"
-#include "gpu_fdinfo.h"
 
 class GPU {
     public:
         gpu_metrics metrics;
         std::string drm_node;
         std::unique_ptr<NVIDIA> nvidia = nullptr;
-        std::unique_ptr<AMDGPU> amdgpu = nullptr;
-        std::unique_ptr<GPU_fdinfo> fdinfo = nullptr;
+        std::unique_ptr<AMDGPU_ADL> amd_adl = nullptr;
+        std::unique_ptr<DXGI_GPU> dxgi_monitor = nullptr;
         bool is_active = false;
         std::string pci_dev;
         uint32_t vendor_id = 0;
@@ -32,33 +32,37 @@ class GPU {
 
         GPU(
             std::string drm_node, uint32_t vendor_id, uint32_t device_id, const char* pci_dev,
-            std::string driver
+            std::string driver, int dxgi_index = 0
         )
             : drm_node(drm_node), pci_dev(pci_dev), vendor_id(vendor_id), device_id(device_id),
             driver(driver) {
                 if (vendor_id == 0x10de)
                     nvidia = std::make_unique<NVIDIA>(pci_dev);
+                else if (vendor_id == 0x1002) {
+                    amd_adl = std::make_unique<AMDGPU_ADL>();
+                    if (!amd_adl->init(dxgi_index))
+                        amd_adl.reset();
+                }
 
-                if (vendor_id == 0x1002)
-                    amdgpu = std::make_unique<AMDGPU>(pci_dev, device_id, vendor_id);
-
-                if (
-                    driver == "i915" || driver == "xe" ||
-                    driver == "panfrost" || driver == "panthor" ||
-                    driver == "msm_dpu" || driver == "msm_drm"
-                )
-                    fdinfo = std::make_unique<GPU_fdinfo>(driver, pci_dev, drm_node);
+                // Always create a DXGI monitor for VRAM info (works for all vendors)
+                dxgi_monitor = std::make_unique<DXGI_GPU>();
+                if (!dxgi_monitor->init(vendor_id, device_id))
+                    dxgi_monitor.reset();
         }
 
         gpu_metrics get_metrics() {
             if (nvidia)
                 this->metrics = nvidia->copy_metrics();
+            else if (amd_adl && amd_adl->is_available())
+                this->metrics = amd_adl->copy_metrics();
 
-            if (amdgpu)
-                this->metrics = amdgpu->copy_metrics();
-
-            if (fdinfo)
-                this->metrics = fdinfo->copy_metrics();
+            // DXGI always supplements VRAM data if available
+            if (dxgi_monitor && dxgi_monitor->is_available()) {
+                if (metrics.memoryTotal <= 0)
+                    metrics.memoryTotal = dxgi_monitor->get_vram_total_gb();
+                if (metrics.sys_vram_used <= 0)
+                    metrics.sys_vram_used = dxgi_monitor->get_vram_used_gb();
+            }
 
             return metrics;
         };
@@ -74,38 +78,31 @@ class GPU {
         void pause() {
             if (nvidia)
                 nvidia->pause();
-
-            if (amdgpu)
-                amdgpu->pause();
-
-            if (fdinfo)
-                fdinfo->pause();
+            if (amd_adl)
+                amd_adl->pause();
+            if (dxgi_monitor)
+                dxgi_monitor->pause();
         }
 
         void resume() {
             if (nvidia)
                 nvidia->resume();
-
-            if (amdgpu)
-                amdgpu->resume();
-
-            if (fdinfo)
-                fdinfo->resume();
+            if (amd_adl)
+                amd_adl->resume();
+            if (dxgi_monitor)
+                dxgi_monitor->resume();
         }
 
         bool is_apu() {
-            if (amdgpu)
-                return amdgpu->is_apu;
-            else
-                return false;
+            return false;
         }
 
         std::shared_ptr<Throttling> throttling() {
             if (nvidia)
                 return nvidia->throttling;
 
-            if (amdgpu)
-                return amdgpu->throttling;
+            if (amd_adl && amd_adl->is_available())
+                return amd_adl->throttling;
 
             return nullptr;
         }
@@ -197,19 +194,14 @@ class GPUS {
         }
 
     private:
-        std::string get_pci_device_address(const std::string& drm_card_path);
-        std::string get_driver(const std::string& node);
-
-        const std::array<std::string, 8> supported_drivers = {
-            "amdgpu", "nvidia", "i915", "xe", "panfrost", "panthor", "msm_dpu", "msm_drm"
+        const std::array<std::string, 2> supported_drivers = {
+            "nvidia", "amd"
         };
 };
 
 extern std::unique_ptr<GPUS> gpus;
 
 void getNvidiaGpuInfo(const struct overlay_params& params);
-void getAmdGpuInfo(void);
-void getIntelGpuInfo();
 bool checkNvidia(const char *pci_dev);
 extern void nvapi_util();
 extern bool checkNVAPI();

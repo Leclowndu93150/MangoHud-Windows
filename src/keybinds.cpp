@@ -2,7 +2,9 @@
 #include <cstring>
 #include <array>
 #include <algorithm>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 #include "hud_elements.h"
 #include "overlay.h"
 #include "timing.hpp"

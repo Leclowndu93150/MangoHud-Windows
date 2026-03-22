@@ -28,8 +28,13 @@ string exec(string command) {
 #endif
     std::array<char, 128> buffer;
     std::string result;
+#ifdef _WIN32
+    auto deleter = [](FILE* ptr){ _pclose(ptr); };
+    std::unique_ptr<FILE, decltype(deleter)> pipe(_popen(command.c_str(), "r"), deleter);
+#else
     auto deleter = [](FILE* ptr){ pclose(ptr); };
     std::unique_ptr<FILE, decltype(deleter)> pipe(popen(command.c_str(), "r"), deleter);
+#endif
     if (!pipe) {
       return "popen failed!";
     }
@@ -270,8 +275,7 @@ void Logger::start_logging() {
 
   if(log_interval != 0){
     std::thread log_thread(&Logger::logging, this);
-    // "mangohud-logging" wouldn't fit in the 15 byte limit
-    pthread_setname_np(log_thread.native_handle(), "mangohud-log");
+    // Thread naming omitted on Windows
     log_thread.detach();
   }
 }

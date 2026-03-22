@@ -1,12 +1,24 @@
 #pragma once
+#include <string>
+#include <memory>
+
+#ifdef _WIN32
+
+class Shell {
+public:
+    Shell() {}
+    ~Shell() {}
+    std::string exec(std::string cmd) { return std::string(); }
+};
+
+#else
+
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstring>
 #ifdef __linux__
 #include <sys/wait.h>
 #endif
-#include <string>
-#include <memory>
 #include <sys/stat.h>
 
 class Shell {
@@ -34,5 +46,7 @@ public:
     std::string exec(std::string cmd);
 
 };
+
+#endif
 
 extern std::unique_ptr<Shell> shell;

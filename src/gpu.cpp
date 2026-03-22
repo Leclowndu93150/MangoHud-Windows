@@ -1,99 +1,111 @@
 #include "gpu.h"
-#include "file_utils.h"
 #include "hud_elements.h"
 
-namespace fs = ghc::filesystem;
+#include <windows.h>
+#include <dxgi.h>
+#include <spdlog/spdlog.h>
+#include <string>
+#include <locale>
+#include <codecvt>
+
+// Helper: convert a wide string (WCHAR[]) to a std::string (UTF-8)
+static std::string wchar_to_utf8(const WCHAR* wstr) {
+    if (!wstr || wstr[0] == L'\0')
+        return "";
+
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
+    if (size_needed <= 0)
+        return "";
+
+    std::string result(size_needed - 1, '\0'); // -1 to exclude null terminator
+    WideCharToMultiByte(CP_UTF8, 0, wstr, -1, &result[0], size_needed, nullptr, nullptr);
+    return result;
+}
+
+// Helper: build a PCI-style device string from DXGI adapter desc for identification
+static std::string make_pci_dev_string(const DXGI_ADAPTER_DESC& desc) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "DXGI-%04X:%04X-%u",
+             desc.VendorId, desc.DeviceId, desc.SubSysId);
+    return std::string(buf);
+}
 
 GPUS::GPUS(const overlay_params* early_params) {
-    std::set<std::string> gpu_entries;
     auto params = early_params ? early_params : get_params().get();
 
-    for (const auto& entry : fs::directory_iterator("/sys/class/drm")) {
-        if (!entry.is_directory())
-            continue;
-
-        std::string node_name = entry.path().filename().string();
-
-        // Check if the directory is a render node (e.g., renderD128, renderD129, etc.)
-        if (node_name.find("renderD") == 0 && node_name.length() > 7) {
-            // Ensure the rest of the string after "renderD" is numeric
-            std::string render_number = node_name.substr(7);
-            if (std::all_of(render_number.begin(), render_number.end(), ::isdigit)) {
-                gpu_entries.insert(node_name);  // Store the render entry
-            }
-        }
+    IDXGIFactory* factory = nullptr;
+    HRESULT hr = CreateDXGIFactory(__uuidof(IDXGIFactory), reinterpret_cast<void**>(&factory));
+    if (FAILED(hr) || !factory) {
+        SPDLOG_ERROR("CreateDXGIFactory failed (HRESULT: 0x{:08X})", static_cast<unsigned>(hr));
+        return;
     }
 
-    // Now process the sorted GPU entries
-    uint8_t idx = 0, total_active = 0;
+    IDXGIAdapter* adapter = nullptr;
+    uint8_t idx = 0;
+    uint8_t total_active = 0;
 
-    for (const auto& node_name : gpu_entries) {
-        const std::string driver = get_driver(node_name);
-
-        if (driver.empty()) {
-            SPDLOG_DEBUG("Failed to query driver name of node \"{}\"", node_name);
+    for (UINT i = 0; factory->EnumAdapters(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
+        DXGI_ADAPTER_DESC desc;
+        hr = adapter->GetDesc(&desc);
+        if (FAILED(hr)) {
+            SPDLOG_WARN("Failed to get DXGI_ADAPTER_DESC for adapter {}", i);
+            adapter->Release();
             continue;
         }
 
-        {
-            const std::string* d =
-                std::find(std::begin(supported_drivers), std::end(supported_drivers), driver);
+        uint32_t vendor_id = desc.VendorId;
+        uint32_t device_id = desc.DeviceId;
 
-            if (d == std::end(supported_drivers)) {
-                SPDLOG_WARN(
-                    "node \"{}\" is using driver \"{}\" which is unsupported by MangoHud. Skipping...",
-                    node_name, driver
-                );
-                continue;
-            }
+        // Skip Microsoft Basic Render Driver and similar software adapters
+        if (vendor_id == 0x1414 && device_id == 0x008c) {
+            SPDLOG_DEBUG("Skipping Microsoft Basic Render Driver (adapter {})", i);
+            adapter->Release();
+            continue;
         }
 
-        std::string path = "/sys/class/drm/" + node_name;
-        std::string device_address = get_pci_device_address(path);  // Store the result
-        const char* pci_dev = device_address.c_str();
+        std::string node_name = wchar_to_utf8(desc.Description);
+        std::string pci_dev_str = make_pci_dev_string(desc);
+        const char* pci_dev = pci_dev_str.c_str();
 
-        uint32_t vendor_id = 0;
-        uint32_t device_id = 0;
-
-        if (!device_address.empty())
-        {
-            try {
-                vendor_id = std::stoul(read_line("/sys/bus/pci/devices/" + device_address + "/vendor"), nullptr, 16);
-            } catch(...) {
-                SPDLOG_ERROR("stoul failed on: {}", "/sys/bus/pci/devices/" + device_address + "/vendor");
-            }
-
-            try {
-                device_id = std::stoul(read_line("/sys/bus/pci/devices/" + device_address + "/device"), nullptr, 16);
-            } catch (...) {
-                SPDLOG_ERROR("stoul failed on: {}", "/sys/bus/pci/devices/" + device_address + "/device");
-            }
-        }
+        // Determine driver string based on vendor
+        std::string driver;
+        if (vendor_id == 0x10de)
+            driver = "nvidia";
+        else if (vendor_id == 0x1002)
+            driver = "amd";
+        else if (vendor_id == 0x8086)
+            driver = "intel";
+        else
+            driver = "unknown";
 
         std::shared_ptr<GPU> ptr =
-            std::make_shared<GPU>(node_name, vendor_id, device_id, pci_dev, driver);
+            std::make_shared<GPU>(node_name, vendor_id, device_id, pci_dev, driver, static_cast<int>(i));
 
         if (params->gpu_list.size() == 1 && params->gpu_list[0] == idx++)
             ptr->is_active = true;
 
-        if (!params->pci_dev.empty() && pci_dev == params->pci_dev)
+        if (!params->pci_dev.empty() && pci_dev_str == params->pci_dev)
             ptr->is_active = true;
 
         available_gpus.emplace_back(ptr);
 
         SPDLOG_DEBUG(
-            "GPU Found: node_name: {}, driver: {}, vendor_id: {:x} device_id: {:x} pci_dev: {}",
-            node_name, driver, vendor_id, device_id, pci_dev
+            "GPU Found: name: {}, driver: {}, vendor_id: {:04x} device_id: {:04x} pci_dev: {}",
+            node_name, driver, vendor_id, device_id, pci_dev_str
         );
 
         if (ptr->is_active) {
             SPDLOG_INFO(
-                "Set {} as active GPU (driver={} id={:x}:{:x} pci_dev={})",
-                node_name, driver, vendor_id, device_id, pci_dev
+                "Set {} as active GPU (driver={} id={:04x}:{:04x} pci_dev={})",
+                node_name, driver, vendor_id, device_id, pci_dev_str
             );
             total_active++;
         }
+
+        adapter->Release();
     }
+
+    factory->Release();
 
     if (total_active < 2)
         return;
@@ -105,50 +117,12 @@ GPUS::GPUS(const overlay_params* early_params) {
         SPDLOG_WARN(
             "You have more than 1 active GPU, check if you use both pci_dev "
             "and gpu_list. If you use fps logging, MangoHud will log only "
-            "this GPU: name = {}, driver = {}, vendor = {:x}, pci_dev = {}",
+            "this GPU: name = {}, driver = {}, vendor = {:04x}, pci_dev = {}",
             gpu->drm_node, gpu->driver, gpu->vendor_id, gpu->pci_dev
         );
 
         break;
     }
-
-}
-
-std::string GPUS::get_driver(const std::string& node) {
-    std::string path = "/sys/class/drm/" + node + "/device/driver";
-
-    if (!fs::exists(path)) {
-        SPDLOG_ERROR("{} doesn't exist", path);
-        return "";
-    }
-
-    if (!fs::is_symlink(path)) {
-        SPDLOG_ERROR("{} is not a symlink (it should be)", path);
-        return "";
-    }
-
-    std::string driver = fs::read_symlink(path).string();
-    driver = driver.substr(driver.rfind("/") + 1);
-
-    return driver;
-}
-
-std::string GPUS::get_pci_device_address(const std::string& drm_card_path) {
-    // /sys/class/drm/renderD128/device/subsystem -> /sys/bus/pci
-    auto subsystem = fs::canonical(drm_card_path + "/device/subsystem").string();
-    auto idx = subsystem.rfind("/") + 1; // /sys/bus/pci
-                                         //         ^
-                                         //         |- find this guy
-    if (subsystem.substr(idx) != "pci")
-        return "";
-
-    // /sys/class/drm/renderD128/device -> /sys/devices/pci0000:00/0000:00:01.0/0000:01:00.0/0000:02:01.0/0000:03:00.0
-    auto pci_addr = fs::read_symlink(drm_card_path + "/device").string();
-    idx = pci_addr.rfind("/") + 1; // /sys/.../0000:03:00.0
-                                   //         ^
-                                   //         |- find this guy
-
-    return pci_addr.substr(idx); // 0000:03:00.0
 }
 
 int GPU::index_in_selected_gpus() {

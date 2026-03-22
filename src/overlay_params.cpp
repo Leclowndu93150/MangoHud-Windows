@@ -143,7 +143,11 @@ parse_control(const char *str)
    std::string path(str);
    size_t npos = path.find("%p");
    if (npos != std::string::npos)
+#ifdef _WIN32
+      path.replace(npos, 2, std::to_string(GetCurrentProcessId()));
+#else
       path.replace(npos, 2, std::to_string(getpid()));
+#endif
    SPDLOG_DEBUG("Socket: {}", path);
 
    int ret = os_socket_listen_abstract(path.c_str(), 1);

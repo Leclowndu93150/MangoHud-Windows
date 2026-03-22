@@ -1,19 +1,21 @@
 #pragma once
 #include <stdio.h>
 #include <inttypes.h>
+#ifdef __linux__
 #include <unistd.h>
+#include <sys/param.h>
+#endif
 #include <string>
 #include "overlay_params.h"
 #include <mutex>
 #include <condition_variable>
 #include <vector>
-#include <sys/param.h>
 #include <algorithm>
 #include <atomic>
 #include <thread>
 #include "gpu_metrics_util.h"
 
-#ifndef TEST_ONLY
+#if !defined(TEST_ONLY) && defined(__linux__)
 #include "gpu_fdinfo.h"
 #endif
 

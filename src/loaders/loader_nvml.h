@@ -1,5 +1,4 @@
-// This is generated file. Do not modify directly.
-// Path to the code generator: /home/crz/git/MangoHud/generate_library_loader.py .
+// NVML loader - Windows version using LoadLibrary/GetProcAddress
 
 #ifndef LIBRARY_LOADER_NVML_H
 #define LIBRARY_LOADER_NVML_H
@@ -13,7 +12,7 @@ typedef nvmlProcessInfo_t nvmlProcessInfo_v1_t;
 #define LIBRARY_LOADER_NVML_H_DLOPEN
 
 #include <string>
-#include <dlfcn.h>
+#include <windows.h>
 #include <memory>
 
 class libnvml_loader {
@@ -49,13 +48,10 @@ class libnvml_loader {
  private:
   void CleanUp(bool unload);
 
-#if defined(LIBRARY_LOADER_NVML_H_DLOPEN)
-  void* library_ = nullptr;
-#endif
+  HMODULE library_ = nullptr;
 
   bool loaded_;
 
-  // Disallow copy constructor and assignment operator.
   libnvml_loader(const libnvml_loader&);
   void operator=(const libnvml_loader&);
 };

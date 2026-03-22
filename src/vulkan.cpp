@@ -52,16 +52,8 @@
 #include "overlay.h"
 #include "notify.h"
 #include "blacklist.h"
-#include "pci_ids.h"
-#if defined(HAVE_WAYLAND)
-#include "wayland_hook.h"
-#endif
-#include "real_dlsym.h"
 #include "file_utils.h"
-#ifdef __linux__
-#include <dlfcn.h>
 #include "implot.h"
-#endif
 #include "imgui_utils.h"
 #include "fps_limiter.h"
 
@@ -70,12 +62,6 @@ using namespace std;
 float offset_x, offset_y, hudSpacing;
 int hudFirstRow, hudSecondRow;
 VkPhysicalDeviceDriverProperties driverProps = {};
-
-#if !defined(_WIN32)
-namespace MangoHud { namespace GL {
-   extern swapchain_stats sw_stats;
-}}
-#endif
 
 /* Mapped from VkInstace/VkPhysicalDevice */
 struct instance_data {
@@ -489,12 +475,6 @@ static void snapshot_swapchain_frame(struct swapchain_data *data)
    struct instance_data *instance_data = device_data->instance;
    update_hud_info(data->sw_stats, instance_data->params, device_data->properties.vendorID);
    check_keybinds(instance_data->params);
-#ifdef __linux__
-   if (instance_data->params.control >= 0) {
-      control_client_check(instance_data->params.control, instance_data->control_client, gpu.c_str());
-      process_control_socket(instance_data->control_client, instance_data->params);
-   }
-#endif
 }
 
 static void compute_swapchain_display(struct swapchain_data *data)
@@ -1655,9 +1635,7 @@ static VkResult overlay_CreateSwapchainKHR(
 
    std::string deviceName = prop.deviceName;
    if (!is_blacklisted()) {
-#ifdef __linux__
       swapchain_data->sw_stats.gpuName = remove_parentheses(deviceName);
-#endif
    }
    swapchain_data->sw_stats.driverName = driverProps.driverInfo;
 
@@ -1953,10 +1931,8 @@ static VkResult overlay_CreateDevice(
 
    if (!is_blacklisted()) {
       device_map_queues(device_data, pCreateInfo);
-#ifdef __linux__
       gpu = device_data->properties.deviceName;
       SPDLOG_DEBUG("gpu: {}", gpu);
-#endif
    }
 
    return result;
@@ -2057,11 +2033,9 @@ static VkResult overlay_CreateInstance(
    }
 
    if (!is_blacklisted()) {
-#ifdef __linux__
       init_system_info();
       instance_data->notifier.params = &instance_data->params;
       start_notifier(instance_data->notifier);
-#endif
 
       init_cpu_stats(instance_data->params);
 
@@ -2124,42 +2098,10 @@ static void overlay_DestroyInstance(
    struct instance_data *instance_data = FIND(struct instance_data, instance);
    instance_data_map_physical_devices(instance_data, false);
    instance_data->vtable.DestroyInstance(instance, pAllocator);
-#ifdef __linux__
    if (!is_blacklisted())
       stop_notifier(instance_data->notifier);
-#endif
    destroy_instance_data(instance_data);
 }
-
-#ifdef VK_USE_PLATFORM_WAYLAND_KHR
-static VkResult overlay_CreateWaylandSurfaceKHR(
-   VkInstance                                  instance,
-   const VkWaylandSurfaceCreateInfoKHR*        pCreateInfo,
-   const VkAllocationCallbacks*                pAllocator,
-   VkSurfaceKHR*                               pSurface
-)
-{
-   VkResult ret;
-   struct instance_data *instance_data = FIND(struct instance_data, instance);
-   HUDElements.display_server = HUDElements.display_servers::WAYLAND;
-   ret = instance_data->vtable.CreateWaylandSurfaceKHR(instance, pCreateInfo, pAllocator, pSurface);
-   if (ret == VK_SUCCESS)
-      init_wayland_data(pCreateInfo->display, (void *) *pSurface);
-   return ret;
-}
-
-static void overlay_DestroySurfaceKHR(
-   VkInstance                                  instance,
-   VkSurfaceKHR                                surface,
-   const VkAllocationCallbacks*                pAllocator
-)
-{
-   struct instance_data *instance_data = FIND(struct instance_data, instance);
-
-   wayland_data_unref(NULL, (void *) surface);
-   instance_data->vtable.DestroySurfaceKHR(instance, surface, pAllocator);
-}
-#endif
 
 extern "C" PUBLIC VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL overlay_GetDeviceProcAddr(VkDevice dev,
                                                                              const char *funcName);
@@ -2181,10 +2123,6 @@ static const struct {
    ADD_HOOK(EndCommandBuffer),
    ADD_HOOK(CmdExecuteCommands),
 
-#ifdef VK_USE_PLATFORM_WAYLAND_KHR
-   ADD_HOOK(CreateWaylandSurfaceKHR),
-   ADD_HOOK(DestroySurfaceKHR),
-#endif
    ADD_HOOK(CreateSwapchainKHR),
    ADD_HOOK(QueuePresentKHR),
    ADD_HOOK(DestroySwapchainKHR),

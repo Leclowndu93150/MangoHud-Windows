@@ -1,11 +1,14 @@
 #pragma once
-#include "gpu.h"
+#include <windows.h>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <condition_variable>
+#include <vector>
+#include <memory>
+#include "gpu_metrics_util.h"
 #ifdef HAVE_NVML
 #include "loaders/loader_nvml.h"
-#endif
-#ifdef HAVE_XNVCTRL
-#include "loaders/loader_nvctrl.h"
-#include "loaders/loader_x11.h"
 #endif
 
 class NVIDIA {
@@ -62,7 +65,7 @@ class NVIDIA {
 
         float get_proc_vram() {
             for (const auto& proc : process_info) {
-                if (static_cast<pid_t>(proc.pid) != pid)
+                if (static_cast<DWORD>(proc.pid) != pid)
                     continue;
 
                 return static_cast<float>(proc.usedGpuMemory);
@@ -83,7 +86,7 @@ class NVIDIA {
         }
 
     private:
-        pid_t pid = getpid();
+        DWORD pid = GetCurrentProcessId();
         std::mutex metrics_mutex;
         gpu_metrics metrics;
         std::thread thread;
@@ -100,16 +103,4 @@ class NVIDIA {
         std::shared_ptr<libnvml_loader> nvml = get_libnvml_loader();
 #endif
 
-#if defined(HAVE_XNVCTRL) && defined(HAVE_X11)
-        Display* display;
-        // std::unique_ptr<Display, std::function<void(Display*)>> display;
-        int num_coolers;
-        int64_t get_nvctrl_fan_speed();
-        std::shared_ptr<libnvctrl_loader> nvctrl = get_libnvctrl_loader();
-
-        void get_instant_metrics_xnvctrl(struct gpu_metrics *metrics);
-        void parse_token(const std::string& token, std::unordered_map<std::string, std::string>& options);
-        bool find_nv_x11(Display*& dpy);
-        char* get_attr_target_string(int attr, int target_type, int target_id);
-#endif
 };

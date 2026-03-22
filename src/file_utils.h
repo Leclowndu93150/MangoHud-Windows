@@ -27,7 +27,6 @@ std::string get_wine_exe_name(bool keep_ext = false);
 std::string get_home_dir();
 std::string get_data_dir();
 std::string get_config_dir();
-bool lib_loaded(const std::string& lib, pid_t pid);
 std::string remove_parentheses(const std::string&);
 std::string to_lower(const std::string& str);
 

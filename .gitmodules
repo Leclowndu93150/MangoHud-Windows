@@ -1,3 +1,6 @@
 [submodule "modules/minhook"]
 	path = modules/minhook
 	url = https://github.com/flightlessmango/minhook
+[submodule "mangojuice"]
+	path = mangojuice
+	url = https://github.com/Leclowndu93150/mangojuice-Windows.git

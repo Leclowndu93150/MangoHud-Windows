@@ -1,5 +1,12 @@
 #pragma once
 #include <atomic>
+#include <vector>
+#include <algorithm>
+#include <cstdint>
+
+#ifndef MAX
+#define MAX(x, y) (((x) > (y)) ? (x) : (y))
+#endif
 
 struct gpu_metrics {
     int load;

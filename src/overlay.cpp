@@ -18,21 +18,13 @@
 #include "fcat.h"
 #include "mesa/util/macros.h"
 #include "battery.h"
-#include "device.h"
 #include "string_utils.h"
 #include "file_utils.h"
-#include "pci_ids.h"
 #include "iostats.h"
-#include "amdgpu.h"
 #include "fps_metrics.h"
 #include "net.h"
-#include "fex.h"
-#include "ftrace.h"
+#include <windows.h>
 
-#ifdef __linux__
-#include <libgen.h>
-#include <unistd.h>
-#endif
 
 namespace fs = ghc::filesystem;
 using namespace std;
@@ -107,38 +99,26 @@ void update_hw_info(const struct overlay_params& params, uint32_t vendorID)
    if (real_params->enabled[OVERLAY_PARAM_ENABLED_cpu_stats] || logger->is_active()) {
       cpuStats.UpdateCPUData();
 
-#ifdef __linux__
       if (real_params->enabled[OVERLAY_PARAM_ENABLED_core_load] || real_params->enabled[OVERLAY_PARAM_ENABLED_cpu_mhz] || logger->is_active())
          cpuStats.UpdateCoreMhz();
       if (real_params->enabled[OVERLAY_PARAM_ENABLED_cpu_temp] || logger->is_active() || real_params->enabled[OVERLAY_PARAM_ENABLED_graphs])
          cpuStats.UpdateCpuTemp();
       if (real_params->enabled[OVERLAY_PARAM_ENABLED_cpu_power] || logger->is_active())
          cpuStats.UpdateCpuPower();
-#endif
    }
    if (real_params->enabled[OVERLAY_PARAM_ENABLED_gpu_stats] || logger->is_active()) {
       if (gpus)
          gpus->get_metrics();
    }
 
-#ifdef __linux__
    if (real_params->enabled[OVERLAY_PARAM_ENABLED_battery])
       Battery_Stats.update();
-   if (!real_params->device_battery.empty()) {
-      device_update(params);
-      if (device_found) {
-            device_info();
-      }
-   }
    if (real_params->enabled[OVERLAY_PARAM_ENABLED_ram] || real_params->enabled[OVERLAY_PARAM_ENABLED_swap] || logger->is_active())
       update_meminfo();
-   if (real_params->enabled[OVERLAY_PARAM_ENABLED_ram_temp])
-      update_mem_temp();
    if (real_params->enabled[OVERLAY_PARAM_ENABLED_procmem])
       update_procmem();
    if (real_params->enabled[OVERLAY_PARAM_ENABLED_io_read] || real_params->enabled[OVERLAY_PARAM_ENABLED_io_write])
       getIoStats(g_io_stats);
-#endif
    if (gpus && gpus->active_gpu()) {
       currentLogData.gpu_load = gpus->active_gpu()->metrics.load;
       currentLogData.gpu_temp = gpus->active_gpu()->metrics.temp;
@@ -147,11 +127,9 @@ void update_hw_info(const struct overlay_params& params, uint32_t vendorID)
       currentLogData.gpu_vram_used = gpus->active_gpu()->metrics.sys_vram_used;
       currentLogData.gpu_power = gpus->active_gpu()->metrics.powerUsage;
    }
-#ifdef __linux__
    currentLogData.ram_used = memused;
    currentLogData.swap_used = swapused;
    currentLogData.process_rss = proc_mem_resident / float((2 << 29)); // GiB, consistent w/ other mem stats
-#endif
 
    currentLogData.cpu_load = cpuStats.GetCPUDataTotal().percent;
    currentLogData.cpu_temp = cpuStats.GetCPUDataTotal().temp;
@@ -180,8 +158,7 @@ struct hw_info_updater
    hw_info_updater()
    {
       thread = std::thread(&hw_info_updater::run, this);
-      // Anything longer than this wouldn't fit in the 15 byte limit
-      pthread_setname_np(thread.native_handle(), "mangohud-hwinfo");
+      // Thread naming not critical on Windows
    }
 
    ~hw_info_updater()
@@ -241,20 +218,8 @@ void update_hud_info_with_frametime(struct swapchain_stats& sw_stats, const stru
       frametime_data.push_back(frametime_ms);
       frametime_data.erase(frametime_data.begin());
    }
-#ifdef __linux__
    if (gpus)
       gpus->update_throttling();
-#endif
-#ifdef HAVE_FEX
-   fex::update_fex_stats();
-#endif
-#ifdef HAVE_FTRACE
-   if (real_params->ftrace.enabled) {
-      if (!FTrace::object)
-         FTrace::object = std::make_unique<FTrace::FTrace>(real_params->ftrace);
-      FTrace::object->update();
-   }
-#endif
    frametime = frametime_ms;
    fps = double(1000 / frametime_ms);
    if (fpsmetrics) fpsmetrics->update(frametime_ms);
@@ -265,9 +230,7 @@ void update_hud_info_with_frametime(struct swapchain_stats& sw_stats, const stru
       hw_update_thread->update(&params, vendorID);
 
       if (fpsmetrics) fpsmetrics->update_thread();
-#ifdef __linux__
       if (HUDElements.net) HUDElements.net->update();
-#endif
 
       sw_stats.fps = 1000000000.0 * sw_stats.n_frames_since_update / elapsed;
 
@@ -455,89 +418,7 @@ void center_text(const std::string& text)
    ImGui::SetCursorPosX((ImGui::GetWindowSize().x / 2 )- (ImGui::CalcTextSize(text.c_str()).x / 2));
 }
 
-#ifdef HAVE_DBUS
-static float get_ticker_limited_pos(float pos, float tw, float& left_limit, float& right_limit)
-{
-   //float cw = ImGui::GetContentRegionAvailWidth() * 3; // only table cell worth of width
-   float cw = ImGui::GetWindowContentRegionMax().x - ImGui::GetStyle().WindowPadding.x;
-   float new_pos_x = ImGui::GetCursorPosX();
-   left_limit = cw - tw + new_pos_x;
-   right_limit = new_pos_x;
-
-   if (cw < tw) {
-      new_pos_x += pos;
-      // acts as a delay before it starts scrolling again
-      if (new_pos_x < left_limit)
-         return left_limit;
-      else if (new_pos_x > right_limit)
-         return right_limit;
-      else
-         return new_pos_x;
-   }
-   return new_pos_x;
-}
-
-void render_mpris_metadata(const struct overlay_params& params, mutexed_metadata& meta, uint64_t frame_timing)
-{
-   static const float overflow = 50.f /* 3333ms * 0.5 / 16.6667 / 2 (to edge and back) */;
-
-   if (meta.meta.valid) {
-      auto color = ImGui::ColorConvertU32ToFloat4(params.media_player_color);
-      ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8,0));
-
-      if (!params.enabled[OVERLAY_PARAM_ENABLED_horizontal]) {
-         ImGui::Dummy(ImVec2(0.0f, 20.0f));
-      }
-
-      if (meta.ticker.needs_recalc) {
-         meta.ticker.formatted.clear();
-         meta.ticker.longest = 0;
-         for (const auto& f : params.media_player_format)
-         {
-            std::string str;
-            try
-            {
-               str = fmt::format(f,
-                                   fmt::arg("artist", meta.meta.artists),
-                                   fmt::arg("title", meta.meta.title),
-                                   fmt::arg("album", meta.meta.album));
-            }
-            catch (const fmt::format_error& err)
-            {
-               SPDLOG_ERROR("formatting error in '{}': {}", f, err.what());
-            }
-            float w = ImGui::CalcTextSize(str.c_str()).x;
-            meta.ticker.longest = std::max(meta.ticker.longest, w);
-            meta.ticker.formatted.push_back({str, w});
-         }
-         meta.ticker.needs_recalc = false;
-      }
-
-      float new_pos, left_limit = 0, right_limit = 0;
-      get_ticker_limited_pos(meta.ticker.pos, meta.ticker.longest, left_limit, right_limit);
-
-      if (meta.ticker.pos < left_limit - overflow * .5f) {
-         meta.ticker.dir = -1;
-         meta.ticker.pos = (left_limit - overflow * .5f) + 1.f /* random */;
-      } else if (meta.ticker.pos > right_limit + overflow) {
-         meta.ticker.dir = 1;
-         meta.ticker.pos = (right_limit + overflow) - 1.f /* random */;
-      }
-
-      meta.ticker.pos -= .5f * (frame_timing / 16666666.7f /* ns */) * meta.ticker.dir;
-
-      for (const auto& fmt : meta.ticker.formatted)
-      {
-         if (fmt.text.empty()) continue;
-         new_pos = get_ticker_limited_pos(meta.ticker.pos, fmt.width, left_limit, right_limit);
-         ImGui::SetCursorPosX(new_pos);
-         HUDElements.TextColored(color, "%s", fmt.text.c_str());
-      }
-
-      ImGui::PopStyleVar();
-   }
-}
-#endif
+// render_mpris_metadata removed (HAVE_DBUS not available on Windows)
 
 static void render_benchmark(swapchain_stats& data, const struct overlay_params& params, const ImVec2& window_size, unsigned height, Clock::time_point now){
    // TODO, FIX LOG_DURATION FOR BENCHMARK
@@ -746,13 +627,7 @@ void render_imgui(swapchain_stats& data, struct overlay_params& params, ImVec2& 
 
 void init_cpu_stats(overlay_params& params)
 {
-#ifdef __linux__
-   auto& enabled = params.enabled;
-   enabled[OVERLAY_PARAM_ENABLED_cpu_stats] = cpuStats.Init()
-                           && enabled[OVERLAY_PARAM_ENABLED_cpu_stats];
-   enabled[OVERLAY_PARAM_ENABLED_cpu_temp] = cpuStats.GetCpuFile()
-                           && enabled[OVERLAY_PARAM_ENABLED_cpu_temp];
-#endif
+   // Windows CPU implementation does not require Init() or GetCpuFile()
 }
 
 struct pci_bus {
@@ -763,135 +638,47 @@ struct pci_bus {
 };
 
 void init_system_info(){
-   #ifdef __linux__
-      const char* ld_preload = getenv("LD_PRELOAD");
-      if (ld_preload)
-         unsetenv("LD_PRELOAD");
+   // Windows system info
+   MEMORYSTATUSEX memInfo;
+   memInfo.dwLength = sizeof(MEMORYSTATUSEX);
+   if (GlobalMemoryStatusEx(&memInfo)) {
+      ram = std::to_string(memInfo.ullTotalPhys / (1024 * 1024)) + " kB";
+   }
 
-      ram =  exec("sed -n 's/^MemTotal: *\\([0-9]*\\).*/\\1/p' /proc/meminfo");
-      trim(ram);
-      cpu =  exec("sed -n 's/^model name.*: \\(.*\\)/\\1/p' /proc/cpuinfo | sed 's/([^)]*)//g' | tail -n1");
+   // CPU name from registry
+   HKEY hKey;
+   if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+      char cpuName[256] = {};
+      DWORD size = sizeof(cpuName);
+      RegQueryValueExA(hKey, "ProcessorNameString", NULL, NULL, (LPBYTE)cpuName, &size);
+      cpu = cpuName;
       trim(cpu);
-      kernel = exec("uname -r");
-      trim(kernel);
-      os = exec("sed -n 's/PRETTY_NAME=\\(.*\\)/\\1/p' /etc/os-release");
-      os.erase(remove(os.begin(), os.end(), '\"' ), os.end());
-      trim(os);
-      cpusched = read_line("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor");
+      RegCloseKey(hKey);
+   }
 
-      const char* mangohud_recursion = getenv("MANGOHUD_RECURSION");
-      if (!mangohud_recursion) {
-         setenv("MANGOHUD_RECURSION", "1", 1);
-         // driver = exec("glxinfo -B | sed -n 's/^OpenGL version.*: \\(.*\\)/\\1/p' | sed 's/([^)]*)//g;s/  / /g'");
-         // trim(driver);
-         unsetenv("MANGOHUD_RECURSION");
-      } else {
-         driver = "MangoHud glxinfo recursion detected";
-      }
+   // OS version
+   OSVERSIONINFOW osvi = {};
+   osvi.dwOSVersionInfoSize = sizeof(osvi);
+   os = "Windows";
+   kernel = "";
 
-// Get WINE version
+   check_for_vkbasalt_and_gamemode();
 
-      wineProcess = get_exe_path();
-      auto n = wineProcess.find_last_of('/');
-      string preloader = wineProcess.substr(n + 1);
-      if (preloader == "wine-preloader" || preloader == "wine64-preloader") {
-         // Check if using Proton
-         if (wineProcess.find("/dist/bin/wine") != std::string::npos
-            || wineProcess.find("/files/bin/wine") != std::string::npos
-            || wineProcess.find("/dist/bin-wow64/wine") != std::string::npos
-            || wineProcess.find("/files/bin-wow64/wine") != std::string::npos)
-         {
-            stringstream ss;
-            ss << dirname((char*)wineProcess.c_str()) << "/../../version";
-            string protonVersion = ss.str();
-            ss.str(""); ss.clear();
-            ss << read_line(protonVersion);
-            std::getline(ss, wineVersion, ' '); // skip first number string
-            std::getline(ss, wineVersion, ' ');
-            trim(wineVersion);
-            string toReplace = "proton-";
-            size_t pos = wineVersion.find(toReplace);
-            if (pos != std::string::npos) {
-               // If found replace
-               wineVersion.replace(pos, toReplace.length(), "Proton ");
-            }
-            else {
-               // If not found insert for non official proton builds
-               wineVersion.insert(0, "Proton ");
-            }
-         }
-         else {
-            char *dir = dirname((char*)wineProcess.c_str());
-            stringstream findVersion;
-            if (preloader == "wine-preloader")
-               findVersion << "\"" << dir << "/wine\" --version";
-            else
-               findVersion << "\"" << dir << "/wine64\" --version";
-            const char *wine_env = getenv("WINELOADERNOEXEC");
-            if (wine_env)
-               unsetenv("WINELOADERNOEXEC");
-            wineVersion = exec(findVersion.str());
-            trim(wineVersion);
-            SPDLOG_DEBUG("WINE version: {}", wineVersion);
-            if (wine_env)
-               setenv("WINELOADERNOEXEC", wine_env, 1);
-         }
-      }
-      else {
-           wineVersion = "";
-      }
-
-      check_for_vkbasalt_and_gamemode();
-
-      if (ld_preload)
-         setenv("LD_PRELOAD", ld_preload, 1);
-
-      SPDLOG_DEBUG("Ram:{}", ram);
-      SPDLOG_DEBUG("Cpu:{}", cpu);
-      SPDLOG_DEBUG("Kernel:{}", kernel);
-      SPDLOG_DEBUG("Os:{}", os);
-      SPDLOG_DEBUG("Driver:{}", driver);
-      SPDLOG_DEBUG("CPU Scheduler:{}", cpusched);
-#endif
+   SPDLOG_DEBUG("Ram:{}", ram);
+   SPDLOG_DEBUG("Cpu:{}", cpu);
+   SPDLOG_DEBUG("Kernel:{}", kernel);
+   SPDLOG_DEBUG("Os:{}", os);
+   SPDLOG_DEBUG("Driver:{}", driver);
+   SPDLOG_DEBUG("CPU Scheduler:{}", cpusched);
 }
 
 void check_for_vkbasalt_and_gamemode() {
-#ifdef __linux__
-   static bool checked = false;
-   if (checked)
-      return;
-
-   if (lib_loaded("gamemode", HUDElements.g_gamescopePid))
-      HUDElements.gamemode_bol = true;
-
-   if (lib_loaded("vkbasalt", HUDElements.g_gamescopePid))
-      HUDElements.vkbasalt_bol = true;
-
-   checked = true;
-#endif
+   // Not applicable on Windows
 }
 
 void update_fan(){
-   // This just handles steam deck fan for now
-   static bool init;
-   string hwmon_path;
-
-   if (!init){
-      string path = "/sys/class/hwmon/";
-      auto dirs = ls(path.c_str(), "hwmon", LS_DIRS);
-      for (auto& dir : dirs) {
-         string full_path = (path + dir + "/name").c_str();
-         if (read_line(full_path).find("steamdeck_hwmon") != string::npos){
-            hwmon_path = path + dir + "/fan1_input";
-            break;
-         }
-      }
-   }
-
-   if (!hwmon_path.empty())
-      fan_speed = stoi(read_line(hwmon_path));
-   else
-      fan_speed = -1;
+   // No hwmon on Windows
+   fan_speed = -1;
 }
 
 void next_hud_position(){

@@ -2,9 +2,7 @@
 
 #include <imgui.h>
 
-#ifdef __linux__
 #include <implot.h>
-#endif
 
 struct imgui_contexts {
     ImGuiContext* imgui = nullptr;

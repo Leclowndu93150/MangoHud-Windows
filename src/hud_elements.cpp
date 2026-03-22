@@ -9,7 +9,6 @@
 #include "hud_elements.h"
 #include "logging.h"
 #include "battery.h"
-#include "device.h"
 #include "cpu.h"
 #include "gpu.h"
 #include "memory.h"
@@ -20,14 +19,8 @@
 #include <IconsForkAwesome.h>
 #include "version.h"
 #include "blacklist.h"
-#ifdef __linux__
 #include "implot.h"
-#endif
-#include "amdgpu.h"
 #include "fps_metrics.h"
-#include "fex.h"
-#include "ftrace.h"
-#include "winesync.h"
 #include "fps_limiter.h"
 
 #define CHAR_CELSIUS    "\xe2\x84\x83"
@@ -249,14 +242,10 @@ static void ImguiNextColumnOrNewRow(int column = -1)
 static bool ImGuiTextOverflow(const char* text) {
     return ImGui::CalcTextSize(text).x > ImGui::CalcItemWidth() + HUDElements.ralign_width / 2;
 }
-// This function is only used in battery and battery is not used in windows builds
-// Battery should probably be reworked to not use this func since nothing else needs it
-#ifdef __linux__
 static void ImGuiTableSetColumnIndex(int column)
 {
     ImGui::TableSetColumnIndex(std::max(0, std::min(column, ImGui::TableGetColumnCount() - 1)));
 }
-#endif
 
 void HudElements::time(){
     if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_time]){
@@ -751,7 +740,6 @@ void HudElements::proc_vram() {
 }
 
 void HudElements::ram(){
-#ifdef __linux__
     if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_ram] ||
         HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_ram_temp]) {
         ImguiNextColumnFirstItem();
@@ -792,12 +780,10 @@ void HudElements::ram(){
         else
             HUDElements.TextColored(HUDElements.colors.text, "°C");
     }
-#endif
 }
 
 void HudElements::procmem()
 {
-#ifdef __linux__
     const char* unit = nullptr;
 
     if (!HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_procmem])
@@ -829,7 +815,6 @@ void HudElements::procmem()
         HUDElements.TextColored(HUDElements.colors.text, "%s", unit);
         ImGui::PopFont();
     }
-#endif
 }
 
 void HudElements::fps(){
@@ -1014,13 +999,6 @@ void HudElements::frame_timing(){
                                     NULL, min_time, max_time,
                                     ImVec2(width, height));
             } else {
-#ifndef __linux__
-                ImGui::PlotLines(hash, get_time_stat, HUDElements.sw_stats,
-                                ARRAY_SIZE(HUDElements.sw_stats->frames_stats), 0,
-                                NULL, min_time, max_time,
-                                ImVec2(width, height));
-#else
-
                 if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_horizontal]) {
                     ImGui::PlotLines(hash, get_time_stat, HUDElements.sw_stats,
                     ARRAY_SIZE(HUDElements.sw_stats->frames_stats), 0,
@@ -1052,11 +1030,9 @@ void HudElements::frame_timing(){
                         ImPlot::EndPlot();
                     }
                 }
-#endif
             }
         }
         ImGui::EndChild();
-#ifdef __linux__
         if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_throttling_status_graph] &&
             gpus && gpus->active_gpu() && gpus->active_gpu()->throttling()){
             ImGui::Dummy(ImVec2(0.0f, real_font_size.y / 2));
@@ -1077,37 +1053,11 @@ void HudElements::frame_timing(){
         }
         ImGui::PopFont();
         ImGui::PopStyleColor();
-#endif
     }
 }
 
 void HudElements::media_player(){
-#ifdef HAVE_DBUS
-    if (!HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_media_player])
-        return;
-
-    ImguiNextColumnFirstItem();
-    uint32_t f_idx = (HUDElements.sw_stats->n_frames - 1) % ARRAY_SIZE(HUDElements.sw_stats->frames_stats);
-    uint64_t frame_timing = HUDElements.sw_stats->frames_stats[f_idx].stats[OVERLAY_PLOTS_frame_timing];
-    ImFont scaled_font = *HUDElements.sw_stats->font_text;
-    scaled_font.Scale = HUDElements.params->font_scale_media_player;
-    ImGui::PushFont(&scaled_font);
-    {
-        std::unique_lock<std::mutex> lck(main_metadata.mtx, std::try_to_lock);
-        if (lck.owns_lock())
-            render_mpris_metadata(*HUDElements.params, main_metadata, frame_timing);
-        else
-            SPDLOG_DEBUG("failed to acquire lock");
-    }
-    if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_horizontal]) {
-        ImguiNextColumnFirstItem();
-    }
-    if (!main_metadata.meta.playing) {
-        HUDElements.TextColored(HUDElements.colors.media_player, "(paused)");
-    }
-
-    ImGui::PopFont();
-#endif
+    // media_player requires HAVE_DBUS (Linux only), not available on Windows
 }
 
 void HudElements::resolution(){
@@ -1195,29 +1145,14 @@ void HudElements::_exec(){
 }
 
 void HudElements::gamemode(){
-    if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_gamemode]){
-        ImguiNextColumnFirstItem();
-        ImGui::PushFont(HUDElements.sw_stats->font_secondary);
-        HUDElements.TextColored(HUDElements.colors.engine, "%s", "GAMEMODE");
-        ImguiNextColumnOrNewRow();
-        right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%s", HUDElements.gamemode_bol ? "ON" : "OFF");
-        ImGui::PopFont();
-    }
+    // No-op on Windows (Linux GameMode)
 }
 
 void HudElements::vkbasalt(){
-    if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_vkbasalt]){
-        ImguiNextColumnFirstItem();
-        ImGui::PushFont(HUDElements.sw_stats->font_secondary);
-        HUDElements.TextColored(HUDElements.colors.engine, "%s", "VKBASALT");
-        ImguiNextColumnOrNewRow();
-        right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%s", HUDElements.vkbasalt_bol ? "ON" : "OFF");
-        ImGui::PopFont();
-    }
+    // No-op on Windows (Linux VkBasalt)
 }
 
 void HudElements::battery(){
-#ifdef __linux__
     if (Battery_Stats.batt_count > 0) {
         if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_battery]) {
             ImguiNextColumnFirstItem();
@@ -1293,7 +1228,6 @@ void HudElements::battery(){
         }
 
     }
-#endif
 }
 
 void HudElements::gamescope_fsr(){
@@ -1389,59 +1323,7 @@ void HudElements::gamescope_frame_timing(){
 
 void HudElements::device_battery()
 {
-#ifdef __linux__
-    std::unique_lock<std::mutex> l(device_lock);
-    if (!HUDElements.params->device_battery.empty()) {
-        if (device_found) {
-            for (int i = 0; i < device_count; i++) {
-                std::string battery = device_data[i].battery;
-                std::string name = device_data[i].name;
-                std::string battery_percent = device_data[i].battery_percent;
-                bool report_percent = device_data[i].report_percent;
-                bool charging = device_data[i].is_charging;
-
-                ImguiNextColumnFirstItem();
-                ImGui::PushFont(HUDElements.sw_stats->font_secondary);
-                HUDElements.TextColored(HUDElements.colors.engine, "%s", name.c_str());
-                ImguiNextColumnOrNewRow();
-                if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_device_battery_icon]) {
-                    if (charging)
-                        right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%s", ICON_FK_USB);
-                    else {
-                        if (battery == "Full")
-                            right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%s", ICON_FK_BATTERY_FULL);
-                        else if (battery == "High")
-                            right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%s", ICON_FK_BATTERY_THREE_QUARTERS);
-                        else if (battery == "Normal")
-                            right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%s", ICON_FK_BATTERY_HALF);
-                        else if (battery == "Low")
-                            right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%s", ICON_FK_BATTERY_QUARTER);
-                        else if (battery == "Unknown")
-                            right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%s", ICON_FK_USB);
-                    }
-                }
-                else {
-                    if (charging)
-                        right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%s", ICON_FK_USB);
-                    else if (report_percent) {
-                        right_aligned_text(HUDElements.colors.text,HUDElements.ralign_width, "%s", battery_percent.c_str());
-                        ImGui::SameLine(0,1.0f);
-                        HUDElements.TextColored(HUDElements.colors.text, "%%");
-                    }
-                    else {
-                        if (battery == "Unknown")
-                            right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%s", ICON_FK_USB);
-                        else
-                            right_aligned_text(HUDElements.colors.text,HUDElements.ralign_width, "%s", battery.c_str());
-                    }
-                }
-                if (device_count > 1 && !HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_horizontal])
-                    ImGui::TableNextRow();
-                ImGui::PopFont();
-            }
-        }
-    }
-#endif
+    // No-op on Windows (Linux sysfs device battery)
 }
 
 void HudElements::frame_count(){
@@ -1597,7 +1479,6 @@ void HudElements::graphs(){
         HUDElements.min = 0;
         HUDElements.TextColored(HUDElements.colors.engine, "%s", "VRAM");
     }
-#ifdef __linux__
     if (value == "ram"){
 
         for (auto& it : graph_data){
@@ -1608,7 +1489,6 @@ void HudElements::graphs(){
         HUDElements.min = 0;
         HUDElements.TextColored(HUDElements.colors.engine, "%s", "RAM");
     }
-#endif
     ImGui::PopFont();
     ImGui::Dummy(ImVec2(0.0f,5.0f));
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
@@ -1680,19 +1560,7 @@ void HudElements::refresh_rate() {
 }
 
 void HudElements::winesync() {
-    static std::unique_ptr<WineSync> winesync_ptr = nullptr;
-    if (!winesync_ptr)
-        winesync_ptr = std::make_unique<WineSync>();
-
-    if (winesync_ptr->valid()) {
-        winesync_ptr->set_pid(HUDElements.g_gamescopePid);
-        ImGui::PushFont(HUDElements.sw_stats->font_secondary);
-        ImguiNextColumnFirstItem();
-        HUDElements.TextColored(HUDElements.colors.engine, "%s", "WSYNC");
-        ImguiNextColumnOrNewRow();
-        right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%s", winesync_ptr->get_method());
-        ImGui::PopFont();
-    }
+    // No-op on Windows (Linux Wine sync detection)
 }
 
 void HudElements::present_mode() {
@@ -1719,7 +1587,6 @@ void HudElements::present_mode() {
 }
 
 void HudElements::network() {
-#ifdef __linux__
     if (HUDElements.net && HUDElements.net->should_reset)
         HUDElements.net.reset(new Net);
 
@@ -1742,204 +1609,19 @@ void HudElements::network() {
         HUDElements.TextColored(HUDElements.colors.text, "KB/s %s", ICON_FK_ARROW_DOWN);
         ImGui::PopFont();
     }
-#endif
 }
 
 void HudElements::_display_session() {
-    if (not HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_display_server])
-        return;
-
-    ImGui::PushFont(HUDElements.sw_stats->font_secondary);
-    ImguiNextColumnFirstItem();
-
-    const char* title = "Display Server";
-    HUDElements.TextColored(HUDElements.colors.engine, "%s", title);
-    ImguiNextColumnOrNewRow();
-
-    // Jump a column if title is overflowing
-    if (ImGuiTextOverflow(title))
-        ImguiNextColumnOrNewRow();
-
-    static std::map<display_servers, std::string> servers {
-        {WAYLAND, {"WAYLAND"}},
-        {XWAYLAND, {"XWAYLAND"}},
-        {XORG, {"XORG"}}
-    };
-    right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width * 1.5f, "%s", servers[HUDElements.display_server].c_str());
-    ImGui::PopFont();
+    // No-op on Windows (Linux X11/Wayland session display)
 }
 
 void HudElements::fex_stats()
 {
-#ifdef HAVE_FEX
-    if (!HUDElements.params->fex_stats.enabled) {
-        return;
-    }
-
-    ImGui::PushFont(HUDElements.sw_stats->font_small);
-
-    if (HUDElements.params->fex_stats.status) {
-        ImguiNextColumnFirstItem();
-        HUDElements.TextColored(HUDElements.colors.engine, "%s", "FEX");
-        ImguiNextColumnOrNewRow();
-        ImGui::Dummy(ImVec2(0.0f, real_font_size.y));
-        ImguiNextColumnOrNewRow();
-        right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%s", fex::fex_status);
-    }
-
-    if (!fex::is_fex_pid_found()) {
-        ImGui::PopFont();
-        return;
-    }
-
-    if (HUDElements.params->fex_stats.app_type) {
-        ImguiNextColumnFirstItem();
-        HUDElements.TextColored(HUDElements.colors.engine, "%s", "Type");
-        ImguiNextColumnOrNewRow();
-        ImGui::Dummy(ImVec2(0.0f, real_font_size.y));
-        ImguiNextColumnOrNewRow();
-        right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%s", fex::get_fex_app_type());
-    }
-
-    if (HUDElements.params->fex_stats.sigbus_counts) {
-        ImguiNextColumnFirstItem();
-        HUDElements.TextColored(HUDElements.colors.engine, "%s", "SIGBUS");
-        ImguiNextColumnOrNewRow();
-        ImGui::Dummy(ImVec2(0.0f, real_font_size.y));
-        ImguiNextColumnOrNewRow();
-        right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%" PRIu64 " - %.0f avg/s", fex::sigbus_counts.Count(), fex::sigbus_counts.Avg());
-    }
-
-    if (HUDElements.params->fex_stats.smc_counts) {
-        ImguiNextColumnFirstItem();
-        HUDElements.TextColored(HUDElements.colors.engine, "%s", "SMC");
-        ImguiNextColumnOrNewRow();
-        ImGui::Dummy(ImVec2(0.0f, real_font_size.y));
-        ImguiNextColumnOrNewRow();
-        right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%" PRIu64 " - %.0f avg/s", fex::smc_counts.Count(), fex::smc_counts.Avg());
-    }
-
-    if (HUDElements.params->fex_stats.softfloat_counts) {
-        ImguiNextColumnFirstItem();
-        HUDElements.TextColored(HUDElements.colors.engine, "%s", "Softfloat");
-        ImguiNextColumnOrNewRow();
-        ImGui::Dummy(ImVec2(0.0f, real_font_size.y));
-        ImguiNextColumnOrNewRow();
-        right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%" PRIu64 " - %.0f avg/s", fex::softfloat_counts.Count(), fex::softfloat_counts.Avg());
-    }
-
-    ImGui::PopFont();
-
-    ImguiNextColumnFirstItem();
-    ImGui::Dummy(ImVec2(0.0f, real_font_size.y));
-
-    if (HUDElements.params->fex_stats.hot_threads) {
-        // Draw hot threads
-        bool Warning = false;
-        ImVec4 WarningColor;
-
-        for (auto it : fex::fex_max_thread_loads){
-            if (it >= 75.0) {
-                Warning = true;
-                WarningColor = ImVec4(1.0f, 0.0f, 0.0f, 1.0f);
-            }
-            else if (it >= 50.0) {
-                Warning = true;
-                WarningColor = ImVec4(1.0f, 1.0f, 0.0f, 1.0f);
-            }
-        }
-
-        ImGui::PushFont(HUDElements.sw_stats->font_small);
-        HUDElements.TextColored(HUDElements.colors.engine, "%s", "FEX JIT top loaded threads");
-        ImGui::PopFont();
-
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-        if (Warning) {
-            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, WarningColor);
-        }
-
-        ImGui::PlotHistogram("", fex::fex_max_thread_loads.data(),
-            fex::fex_max_thread_loads.size(), 0,
-            NULL, 0, 100,
-            ImVec2((ImGui::GetWindowContentRegionMax().x - ImGui::GetWindowContentRegionMin().x), 50));
-        ImGui::PopStyleColor(1 + (Warning ? 1 : 0));
-    }
-
-    if (HUDElements.params->fex_stats.jit_load) {
-        ImGui::PushFont(HUDElements.sw_stats->font_small);
-        HUDElements.TextColored(HUDElements.colors.engine, "%s", "FEX JIT Load");
-        ImGui::PopFont();
-
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-
-        ImGui::PlotLines("", fex::fex_load_data.data(),
-            fex::fex_load_data.size(), 0,
-            NULL, 0, 100,
-            ImVec2((ImGui::GetWindowContentRegionMax().x - ImGui::GetWindowContentRegionMin().x), 50));
-        ImGui::PopStyleColor(1);
-    }
-#endif //HAVE_FEX
+    // No-op on Windows (Linux FEX emulation)
 }
 
 void HudElements::ftrace() {
-#ifdef HAVE_FTRACE
-    if (!HUDElements.params->ftrace.enabled || !FTrace::object)
-        return;
-
-    float width = (ImGui::GetWindowContentRegionMax().x - ImGui::GetWindowContentRegionMin().x);
-    float height = 100;
-
-    for (auto& tp : FTrace::object->tracepoints()) {
-        switch (tp->type) {
-        case FTrace::TracepointType::Histogram:
-        case FTrace::TracepointType::LineGraph:
-        {
-            char hash[40];
-            snprintf(hash, sizeof(hash), "##%s", tp->name.c_str());
-
-            ImGui::TableNextRow();
-            ImguiNextColumnFirstItem();
-            ImGui::PushFont(HUDElements.sw_stats->font_small);
-            ImGui::Dummy(ImVec2(0.0f, real_font_size.y));
-            HUDElements.TextColored(HUDElements.colors.text, "ftrace %s: %s",
-                                    tp->type == FTrace::TracepointType::Histogram ? "histogram" : "line graph",
-                                    tp->name.c_str());
-            ImGui::Dummy(ImVec2(0.0f, real_font_size.y / 2));
-            if (tp->type == FTrace::TracepointType::LineGraph) {
-               HUDElements.TextColored(HUDElements.colors.text, "    parameter: %s", tp->field_name.c_str());
-               ImGui::Dummy(ImVec2(0.0f, real_font_size.y / 2));
-            }
-            ImGui::PopFont();
-            if (ImGui::BeginChild(tp->name.c_str(), ImVec2(width, height), false, ImGuiWindowFlags_NoDecoration)) {
-                if (tp->type == FTrace::TracepointType::Histogram) {
-                    ImGui::PlotHistogram(hash, FTrace::FTrace::get_plot_values, tp.get(), FTrace::Tracepoint::PLOT_DATA_CAPACITY, 0,
-                                         NULL, tp->data.plot.range.min, tp->data.plot.range.max, ImVec2(width, height));
-                } else {
-                    ImGui::PlotLines(hash, FTrace::FTrace::get_plot_values, tp.get(), FTrace::Tracepoint::PLOT_DATA_CAPACITY, 0,
-                                         NULL, tp->data.plot.range.min, tp->data.plot.range.max, ImVec2(width, height));
-                }
-            }
-            ImGui::EndChild();
-            break;
-        }
-        case FTrace::TracepointType::Label:
-        {
-            ImGui::TableNextRow();
-            ImguiNextColumnFirstItem();
-            ImGui::PushFont(HUDElements.sw_stats->font_small);
-            ImGui::Dummy(ImVec2(0.0f, real_font_size.y));
-            HUDElements.TextColored(HUDElements.colors.text, "ftrace label: %s:", tp->name.c_str());
-            ImGui::Dummy(ImVec2(0.0f, real_font_size.y / 2));
-            HUDElements.TextColored(HUDElements.colors.text, "    %s=%s", tp->field_name.c_str(), tp->data.field_value.c_str());
-            ImGui::Dummy(ImVec2(0.0f, real_font_size.y / 2));
-            ImGui::PopFont();
-            break;
-        }
-        default:
-            UNREACHABLE("invalid tracepoint type");
-        }
-    }
-#endif // HAVE_FTRACE
+    // No-op on Windows (Linux kernel tracing)
 }
 
 void HudElements::sort_elements(const std::pair<std::string, std::string>& option) {
@@ -2124,31 +1806,12 @@ void HudElements::legacy_elements(const overlay_params* temp_params){
         ordered_functions.push_back({_display_session, "display_session", value});
     if (temp_params->fex_stats.enabled)
         ordered_functions.push_back({fex_stats, "fex_stats", value});
-#ifdef HAVE_FTRACE
     if (temp_params->ftrace.enabled)
         ordered_functions.push_back({ftrace, "ftrace", value});
-#endif
 }
 
 void HudElements::update_exec(){
-#ifdef __linux__
-    // TODO: exec needs a rewrite using as using fork() is not safe in multithread.
-    // We should probably use posix_spawn instead.
-    // This currently stalls games using feral launcher.
-    // For now don't init shell unless we have some exec options.
-    if (exec_list.empty())
-        return;
-
-    if (!HUDElements.shell)
-        HUDElements.shell = std::make_unique<Shell>();
-
-    for(auto& item : exec_list){
-        std::string ret = HUDElements.shell->exec(item.value + "\n");
-        // use the previous ret if we get bad system call
-        if (ret.find("Bad system call") == std::string::npos)
-            item.ret = ret;
-    }
-#endif
+    // No-op on Windows (Shell/fork not available)
 }
 
 std::string_view HudElements::get_vulkan_present_mode_short_name(VkPresentModeKHR mode) {

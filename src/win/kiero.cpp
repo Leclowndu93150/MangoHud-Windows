@@ -20,11 +20,7 @@
 
 #if KIERO_INCLUDE_D3D12
 # include <dxgi.h>
-#ifdef _MSC_VER
-    #include <d3d12.h>
-#else
-    #include "/usr/i686-w64-mingw32/include/d3d12.h"
-#endif
+# include <d3d12.h>
 #endif
 
 #if KIERO_INCLUDE_OPENGL

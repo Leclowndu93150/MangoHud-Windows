@@ -36,7 +36,7 @@ class HudElements{
         int place;
         int text_column = 1;
         int table_columns_count = 0;
-        pid_t g_gamescopePid = -1;
+        int g_gamescopePid = -1;
         int g_fsrUpscale = -1;
         int g_fsrSharpness = -1;
         Clock::time_point last_exec;
@@ -65,9 +65,6 @@ class HudElements{
 
         display_servers display_server = UNKNOWN;
         std::unique_ptr<Net> net = nullptr;
-#ifdef __linux__
-        std::unique_ptr<Shell> shell = nullptr;
-#endif
 
         void sort_elements(const std::pair<std::string, std::string>& option);
         void legacy_elements(const overlay_params* temp_params);

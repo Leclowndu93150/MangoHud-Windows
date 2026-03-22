@@ -2,11 +2,7 @@
 #include <dxgi.h>
 #include <dxgi1_5.h>
 #include <dxgi1_4.h>
-#ifdef _MSC_VER
-    #include <d3d12.h>
-#else
-    #include "/usr/i686-w64-mingw32/include/d3d12.h"
-#endif
+#include <d3d12.h>
 #ifndef __D3D12_IMPL_H__
 #define __D3D12_IMPL_H__
 
@@ -17,6 +13,9 @@ namespace impl
 		void init();
 	}
 }
+
 long __fastcall hkPresent12(IDXGISwapChain3* pSwapChain, UINT SyncInterval, UINT Flags);
+void __fastcall hkExecuteCommandLists12(ID3D12CommandQueue* queue, UINT NumCommandLists, ID3D12CommandList* const* ppCommandLists);
+HRESULT __stdcall hkResizeBuffers12(IDXGISwapChain* pSwapChain, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags);
 
 #endif // __D3D12_IMPL_H__

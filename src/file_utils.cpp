@@ -1,18 +1,18 @@
 #include "file_utils.h"
 #include "string_utils.h"
+#ifdef __linux__
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <dirent.h>
 #include <limits.h>
+#endif
 #include <fstream>
 #include <cstring>
 #include <string>
 #include <spdlog/spdlog.h>
 
-#ifndef PROCDIR
-#define PROCDIR "/proc"
-#endif
+// Platform-agnostic functions
 
 std::string read_line(const std::string& filename)
 {
@@ -36,7 +36,26 @@ std::string get_basename(const std::string&& path)
     return path;
 }
 
-#ifdef __linux__
+std::string remove_parentheses(const std::string& text) {
+    // Remove parentheses and text between them
+    std::regex pattern("\\([^)]*\\)");
+    return std::regex_replace(text, pattern, "");
+}
+
+std::string to_lower(const std::string& str) {
+    std::string lowered = str;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    return lowered;
+}
+
+// Platform-specific functions (Linux only; Windows versions in file_utils_win32.cpp)
+#ifndef _WIN32
+
+#ifndef PROCDIR
+#define PROCDIR "/proc"
+#endif
+
 std::vector<std::string> ls(const char* root, const char* prefix, LS_FLAGS flags)
 {
     std::vector<std::string> list;
@@ -206,17 +225,4 @@ bool lib_loaded(const std::string& lib, pid_t pid) {
     return false;
 }
 
-std::string remove_parentheses(const std::string& text) {
-    // Remove parentheses and text between them
-    std::regex pattern("\\([^)]*\\)");
-    return std::regex_replace(text, pattern, "");
-}
-
-std::string to_lower(const std::string& str) {
-    std::string lowered = str;
-    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
-    return lowered;
-}
-
-#endif // __linux__
+#endif // !_WIN32

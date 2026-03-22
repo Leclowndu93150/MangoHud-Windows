@@ -16,30 +16,13 @@ class WineSync {
             {"ntsync", "NTsync"},
         };
 
-        pid_t pid;
+        int pid;
         std::string method = "NONE";
         bool inside_wine = true;
     public:
         void determine_sync_variant() {
-#ifdef __linux__
-            // check that's were inside wine
-            std::string wineProcess = get_exe_path();
-            auto n = wineProcess.find_last_of('/');
-            std::string preloader = wineProcess.substr(n + 1);
-            if (preloader != "wine-preloader" && preloader != "wine64-preloader"){
-                inside_wine = false;
-                return;
-            }
-
-            for (auto& [key, val] : methods) {
-                if (lib_loaded(key, pid)) {
-                    method = key;
-                    break;
-                }
-            }
-
-            SPDLOG_DEBUG("Wine sync method: {}", methods.at(method));
-#endif
+            inside_wine = false;
+            return;
         }
 
         bool valid() {
@@ -51,7 +34,7 @@ class WineSync {
             return methods.at(method).c_str();
         }
 
-        void set_pid(pid_t _pid) {
+        void set_pid(int _pid) {
             if (_pid != pid) {
                 pid = _pid;
                 determine_sync_variant();
