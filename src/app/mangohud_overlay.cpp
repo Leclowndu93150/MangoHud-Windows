@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <dwmapi.h>
 #include <d3d11.h>
+#include <tlhelp32.h>
 #include <spdlog/spdlog.h>
 #include <imgui.h>
 #include <implot.h>
@@ -20,6 +21,7 @@
 #include "../notify.h"
 #include "../file_utils.h"
 #include "../blacklist.h"
+#include "fps_etw.h"
 
 extern overlay_params *_params;
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -34,6 +36,11 @@ static bool g_running = true;
 static swapchain_stats g_sw_stats {};
 static ImVec2 g_window_size;
 static notify_thread g_notifier {};
+
+// Target game window tracking
+static HWND g_target_hwnd = nullptr;
+static std::string g_target_process;
+static RECT g_target_rect = {};
 
 static void cleanup_rtv()
 {
@@ -87,6 +94,169 @@ static bool create_d3d(HWND hwnd, int w, int h)
     return true;
 }
 
+// Get the process name for a given window handle
+static std::string get_window_process_name(HWND hwnd)
+{
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (!pid) return "";
+
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return "";
+
+    PROCESSENTRY32 pe = {};
+    pe.dwSize = sizeof(pe);
+
+    std::string name;
+    if (Process32First(snap, &pe)) {
+        do {
+            if (pe.th32ProcessID == pid) {
+                name = pe.szExeFile;
+                break;
+            }
+        } while (Process32Next(snap, &pe));
+    }
+
+    CloseHandle(snap);
+    return name;
+}
+
+// Check if a window looks like a game (visible, sizable, has a title, not a system window)
+static bool is_game_window(HWND hwnd)
+{
+    if (!IsWindowVisible(hwnd)) return false;
+    if (hwnd == g_hwnd) return false;
+
+    LONG style = GetWindowLongW(hwnd, GWL_STYLE);
+    LONG exStyle = GetWindowLongW(hwnd, GWL_EXSTYLE);
+
+    // Skip tool windows, tooltips, etc
+    if (exStyle & WS_EX_TOOLWINDOW) return false;
+
+    // Must have a title
+    char title[256];
+    if (GetWindowTextA(hwnd, title, sizeof(title)) == 0) return false;
+
+    // Skip tiny windows (probably UI elements)
+    RECT rect;
+    GetClientRect(hwnd, &rect);
+    int w = rect.right - rect.left;
+    int h = rect.bottom - rect.top;
+    if (w < 400 || h < 300) return false;
+
+    // Skip known non-game processes
+    std::string proc = get_window_process_name(hwnd);
+    if (proc == "explorer.exe" || proc == "MangoHud.exe" ||
+        proc == "MangoJuice.exe" || proc == "mangojuice.exe" ||
+        proc == "SearchHost.exe" || proc == "ShellExperienceHost.exe" ||
+        proc == "SystemSettings.exe" || proc == "ApplicationFrameHost.exe" ||
+        proc == "TextInputHost.exe" || proc == "cmd.exe" ||
+        proc == "powershell.exe" || proc == "WindowsTerminal.exe" ||
+        proc == "conhost.exe" || proc == "Code.exe")
+        return false;
+
+    return true;
+}
+
+// Find the target game window
+// If g_target_process is set, find a window belonging to that process
+// Otherwise find the foreground window if it looks like a game
+static HWND find_target_window()
+{
+    if (!g_target_process.empty()) {
+        // Enumerate all windows looking for one from this process
+        struct EnumData {
+            std::string target;
+            HWND result;
+            HWND overlay;
+        } data = { g_target_process, nullptr, g_hwnd };
+
+        EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL {
+            auto* d = reinterpret_cast<EnumData*>(lParam);
+            if (hwnd == d->overlay) return TRUE;
+            if (!IsWindowVisible(hwnd)) return TRUE;
+
+            std::string proc = get_window_process_name(hwnd);
+            if (_stricmp(proc.c_str(), d->target.c_str()) == 0) {
+                RECT r;
+                GetClientRect(hwnd, &r);
+                if ((r.right - r.left) >= 400 && (r.bottom - r.top) >= 300) {
+                    d->result = hwnd;
+                    return FALSE;
+                }
+            }
+            return TRUE;
+        }, reinterpret_cast<LPARAM>(&data));
+
+        return data.result;
+    }
+
+    // Auto-detect: use the foreground window if it looks like a game
+    HWND fg = GetForegroundWindow();
+    if (fg && is_game_window(fg))
+        return fg;
+
+    return nullptr;
+}
+
+// Update the overlay window position/size to match the target game window
+static bool track_target_window()
+{
+    HWND target = find_target_window();
+
+    if (!target || !IsWindow(target)) {
+        g_target_hwnd = nullptr;
+        return false;
+    }
+
+    if (target != g_target_hwnd) {
+        g_target_hwnd = target;
+        char title[256] = {};
+        GetWindowTextA(target, title, sizeof(title));
+        std::string proc = get_window_process_name(target);
+        SPDLOG_INFO("Targeting window: \"{}\" ({})", title, proc);
+
+        // Start ETW FPS tracing for this process
+        DWORD pid = 0;
+        GetWindowThreadProcessId(target, &pid);
+        if (pid) {
+            etw_fps::stop();
+            if (!etw_fps::start(pid)) {
+                SPDLOG_WARN("ETW FPS tracing unavailable (need admin). FPS will not be shown.");
+            }
+        }
+    }
+
+    RECT rect;
+    if (!GetWindowRect(target, &rect))
+        return false;
+
+    int x = rect.left;
+    int y = rect.top;
+    int w = rect.right - rect.left;
+    int h = rect.bottom - rect.top;
+
+    if (w < 1 || h < 1) return false;
+
+    // Only reposition if something changed
+    if (memcmp(&rect, &g_target_rect, sizeof(RECT)) != 0) {
+        g_target_rect = rect;
+        SetWindowPos(g_hwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+        // Resize D3D swapchain if size changed
+        static int last_w = 0, last_h = 0;
+        if (w != last_w || h != last_h) {
+            last_w = w;
+            last_h = h;
+            cleanup_rtv();
+            g_swapchain->ResizeBuffers(0, w, h, DXGI_FORMAT_UNKNOWN, 0);
+            create_rtv();
+        }
+    }
+
+    return true;
+}
+
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
@@ -97,26 +267,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         g_running = false;
         PostQuitMessage(0);
         return 0;
-    case WM_SIZE:
-        if (g_device && wParam != SIZE_MINIMIZED) {
-            cleanup_rtv();
-            g_swapchain->ResizeBuffers(0, LOWORD(lParam), HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
-            create_rtv();
-        }
-        return 0;
-    case WM_DISPLAYCHANGE:
-        // Monitor resolution changed, resize overlay to match
-        if (g_hwnd) {
-            int sw = GetSystemMetrics(SM_CXSCREEN);
-            int sh = GetSystemMetrics(SM_CYSCREEN);
-            SetWindowPos(g_hwnd, HWND_TOPMOST, 0, 0, sw, sh, SWP_NOACTIVATE);
-        }
-        return 0;
     }
     return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
-static HWND create_overlay_window()
+static HWND create_overlay_window(int x, int y, int w, int h)
 {
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
@@ -126,29 +281,19 @@ static HWND create_overlay_window()
     wc.lpszClassName = L"MangoHudOverlay";
     RegisterClassExW(&wc);
 
-    int sw = GetSystemMetrics(SM_CXSCREEN);
-    int sh = GetSystemMetrics(SM_CYSCREEN);
-
-    // WS_EX_TOPMOST:     always on top
-    // WS_EX_TRANSPARENT:  clicks pass through to the window below
-    // WS_EX_LAYERED:      needed for per-pixel alpha
-    // WS_EX_TOOLWINDOW:   doesn't show in taskbar or alt-tab
-    // WS_EX_NOACTIVATE:   never steals focus
     HWND hwnd = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
         L"MangoHudOverlay",
         L"MangoHud",
         WS_POPUP,
-        0, 0, sw, sh,
+        x, y, w, h,
         nullptr, nullptr, GetModuleHandleW(nullptr), nullptr
     );
 
     if (!hwnd) return nullptr;
 
-    // Set color key: pure black (0,0,0) becomes fully transparent
     SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), 0, LWA_COLORKEY);
 
-    // Extend DWM frame for proper composition
     MARGINS margins = { -1, -1, -1, -1 };
     DwmExtendFrameIntoClientArea(hwnd, &margins);
 
@@ -162,11 +307,16 @@ int main(int argc, char* argv[])
 {
     overlay_params params {};
 
-    // If this EXE lives next to MangoHud's dxgi proxy, keep that proxy in
-    // pure-forwarding mode while the standalone overlay creates its own D3D device.
     SetEnvironmentVariableA("MANGOHUD_DISABLE_DXGI_PROXY_HOOKS", "1");
 
-    // Prevent multiple instances
+    // Parse command line: MangoHud.exe [process_name.exe]
+    if (argc > 1) {
+        g_target_process = argv[1];
+        printf("MangoHud: targeting process \"%s\"\n", g_target_process.c_str());
+    } else {
+        printf("MangoHud: auto-detecting game window (foreground)\n");
+    }
+
     HANDLE mutex = CreateMutexW(nullptr, TRUE, L"MangoHudOverlayMutex");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         CloseHandle(mutex);
@@ -175,36 +325,33 @@ int main(int argc, char* argv[])
 
     init_spdlog();
 
-    // Ensure config dir exists
     std::string config_dir = get_config_dir();
-    if (!config_dir.empty()) {
+    if (!config_dir.empty())
         CreateDirectoryA(config_dir.c_str(), nullptr);
-    }
 
     _params = &params;
-
     parse_overlay_config(&params, getenv("MANGOHUD_CONFIG"), false);
 
     if (!gpus)
         gpus = std::make_unique<GPUS>(&params);
 
     init_cpu_stats(params);
-
     init_system_info();
 
     g_notifier.params = &params;
     start_notifier(g_notifier);
 
-    g_hwnd = create_overlay_window();
+    // Start with screen-sized window, will resize once we find a target
+    int sw = GetSystemMetrics(SM_CXSCREEN);
+    int sh = GetSystemMetrics(SM_CYSCREEN);
+
+    g_hwnd = create_overlay_window(0, 0, sw, sh);
     if (!g_hwnd) {
         SPDLOG_ERROR("Failed to create overlay window");
         stop_notifier(g_notifier);
         CloseHandle(mutex);
         return 1;
     }
-
-    int sw = GetSystemMetrics(SM_CXSCREEN);
-    int sh = GetSystemMetrics(SM_CYSCREEN);
 
     if (!create_d3d(g_hwnd, sw, sh)) {
         SPDLOG_ERROR("Failed to create D3D11 device");
@@ -215,7 +362,6 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    // Init ImGui
     ImGui::CreateContext();
     ImPlot::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -233,7 +379,8 @@ int main(int argc, char* argv[])
 
     if (!logger) logger = std::make_unique<Logger>(&params);
 
-    // Main loop
+    printf("MangoHud overlay running. Waiting for game window...\n");
+
     MSG msg;
     while (g_running) {
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -244,17 +391,19 @@ int main(int argc, char* argv[])
         }
         if (!g_running) break;
 
-        // Keybinds (toggle visibility, logging, etc)
         check_keybinds(params);
 
-        // Update stats
-        update_hud_info(g_sw_stats, params, 0);
+        // Feed real game frametime from ETW into MangoHud's stats
+        uint64_t ft_ns = etw_fps::get_frametime_ns();
+        if (ft_ns > 0) {
+            update_hud_info_with_frametime(g_sw_stats, params, 0, ft_ns);
+        } else {
+            update_hud_info(g_sw_stats, params, 0);
+        }
 
-        // Hot-reload colors
         if (HUDElements.colors.update)
             HUDElements.convert_colors(params);
 
-        // Hot-reload fonts
         if (g_sw_stats.font_params_hash != params.font_params_hash) {
             g_sw_stats.font_params_hash = params.font_params_hash;
             create_fonts(nullptr, params, g_sw_stats.font_small, g_sw_stats.font_text, g_sw_stats.font_secondary);
@@ -262,12 +411,23 @@ int main(int argc, char* argv[])
             ImGui_ImplDX11_CreateDeviceObjects();
         }
 
-        // Update display size if resolution changed
-        int curW = GetSystemMetrics(SM_CXSCREEN);
-        int curH = GetSystemMetrics(SM_CYSCREEN);
-        io.DisplaySize = ImVec2((float)curW, (float)curH);
+        // Track target game window
+        bool has_target = track_target_window();
 
-        // Render
+        if (!has_target) {
+            // No game window found, hide overlay and wait
+            ShowWindow(g_hwnd, SW_HIDE);
+            Sleep(500);
+            continue;
+        }
+
+        ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
+
+        // Set display size to target window size
+        int tw = g_target_rect.right - g_target_rect.left;
+        int th = g_target_rect.bottom - g_target_rect.top;
+        io.DisplaySize = ImVec2((float)tw, (float)th);
+
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
@@ -284,12 +444,11 @@ int main(int argc, char* argv[])
         g_context->ClearRenderTargetView(g_rtv, clear);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
-        g_swapchain->Present(1, 0); // vsync to avoid wasting GPU
-
-        Sleep(1); // yield
+        g_swapchain->Present(1, 0);
+        Sleep(1);
     }
 
-    // Cleanup
+    etw_fps::stop();
     stop_notifier(g_notifier);
     stop_hw_updater();
 

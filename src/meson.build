@@ -153,9 +153,11 @@ configure_file(input : 'mangohud.json.in',
 # MangoHud standalone overlay (windowed mode, default)
 dep_dwmapi = cc.find_library('dwmapi', required: true)
 
+dep_advapi32 = cc.find_library('advapi32', required: true)
+
 mangohud_overlay = executable(
   'MangoHud',
-  files('app/mangohud_overlay.cpp'),
+  files('app/mangohud_overlay.cpp', 'app/fps_etw.cpp'),
   c_args : [pre_args, vulkan_wsi_args],
   cpp_args : [pre_args, vulkan_wsi_args],
   gui_app : false,
@@ -177,7 +179,8 @@ mangohud_overlay = executable(
     dep_dxgi,
     dep_psapi,
     dep_iphlpapi,
-    dep_dwmapi],
+    dep_dwmapi,
+    dep_advapi32],
   include_directories : [inc_common],
   link_args : link_args,
   install: true,
