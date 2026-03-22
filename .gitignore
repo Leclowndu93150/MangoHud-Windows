@@ -50,3 +50,4 @@ subprojects/cmocka/
 **/GPATH
 **/GRTAGS
 **/GTAGS
+subprojects/minhook
