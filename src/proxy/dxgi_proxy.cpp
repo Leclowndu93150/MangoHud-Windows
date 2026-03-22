@@ -16,6 +16,21 @@
 static HMODULE s_realDXGI = nullptr;
 static bool s_hooksInited = false;
 static bool s_initFailed = false;
+static bool s_disableHooksForHost = false;
+
+static bool isStandaloneOverlayHost() {
+    char modulePath[MAX_PATH] = {};
+    const DWORD len = GetModuleFileNameA(nullptr, modulePath, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH)
+        return false;
+
+    std::string exeName(modulePath, len);
+    const size_t slash = exeName.find_last_of("\\/");
+    if (slash != std::string::npos)
+        exeName.erase(0, slash + 1);
+
+    return _stricmp(exeName.c_str(), "MangoHud.exe") == 0;
+}
 
 static void ensureRealDXGI() {
     if (s_realDXGI) return;
@@ -58,6 +73,7 @@ static DWORD WINAPI initOverlayThread(LPVOID) {
 
 static void initOverlayHooks() {
     if (s_hooksInited || s_initFailed) return;
+    if (s_disableHooksForHost) return;
 
     const char* disable_hooks = getenv("MANGOHUD_DISABLE_DXGI_PROXY_HOOKS");
     if (disable_hooks && strcmp(disable_hooks, "1") == 0)
@@ -131,6 +147,7 @@ __declspec(dllexport) HRESULT WINAPI DXGIDeclareAdapterRemovalSupport(void) {
 BOOL WINAPI DllMain(HINSTANCE hInstance, DWORD fdwReason, LPVOID lpReserved) {
     if (fdwReason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hInstance);
+        s_disableHooksForHost = isStandaloneOverlayHost();
         ensureRealDXGI();
     }
     return TRUE;

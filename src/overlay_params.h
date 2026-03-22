@@ -313,12 +313,12 @@ struct overlay_params {
             engine_color, io_color, frametime_color, background_color,
             text_color, wine_color, battery_color, network_color,
             horizontal_separator_color;
-   std::vector<unsigned> gpu_load_color;
-   std::vector<unsigned> cpu_load_color;
-   std::vector<unsigned> gpu_load_value;
-   std::vector<unsigned> cpu_load_value;
-   std::vector<unsigned> fps_color;
-   std::vector<unsigned> fps_value;
+   std::vector<unsigned> gpu_load_color { 0x39f900, 0xfdfd09, 0xb22222 };
+   std::vector<unsigned> cpu_load_color { 0x39f900, 0xfdfd09, 0xb22222 };
+   std::vector<unsigned> gpu_load_value { 60, 90 };
+   std::vector<unsigned> cpu_load_value { 60, 90 };
+   std::vector<unsigned> fps_color { 0xb22222, 0xfdfd09, 0x39f900 };
+   std::vector<unsigned> fps_value { 30, 60 };
    unsigned media_player_color;
    unsigned table_columns;
    bool no_small_font;

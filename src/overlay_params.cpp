@@ -86,6 +86,46 @@ size_t get_hash(T const& first, Ts const&... rest)
 #endif
 
 namespace {
+constexpr std::array<unsigned, 3> kDefaultGpuLoadColors = { 0x39f900, 0xfdfd09, 0xb22222 };
+constexpr std::array<unsigned, 3> kDefaultCpuLoadColors = { 0x39f900, 0xfdfd09, 0xb22222 };
+constexpr std::array<unsigned, 3> kDefaultFpsColors = { 0xb22222, 0xfdfd09, 0x39f900 };
+constexpr std::array<unsigned, 2> kDefaultGpuLoadValues = { 60, 90 };
+constexpr std::array<unsigned, 2> kDefaultCpuLoadValues = { 60, 90 };
+constexpr std::array<unsigned, 2> kDefaultFpsValues = { 30, 60 };
+
+template <size_t N>
+void ensure_vector_defaults(std::vector<unsigned>& values, const std::array<unsigned, N>& defaults)
+{
+   if (values.size() >= defaults.size())
+      return;
+
+   values.insert(values.end(), defaults.begin() + values.size(), defaults.end());
+}
+
+void ensure_overlay_vector_defaults(struct overlay_params *params)
+{
+   ensure_vector_defaults(params->gpu_load_color, kDefaultGpuLoadColors);
+   ensure_vector_defaults(params->cpu_load_color, kDefaultCpuLoadColors);
+   ensure_vector_defaults(params->fps_color, kDefaultFpsColors);
+   ensure_vector_defaults(params->gpu_load_value, kDefaultGpuLoadValues);
+   ensure_vector_defaults(params->cpu_load_value, kDefaultCpuLoadValues);
+   ensure_vector_defaults(params->fps_value, kDefaultFpsValues);
+}
+
+struct ParsingGuard {
+   bool& parsing;
+
+   explicit ParsingGuard(bool& parsing) : parsing(parsing)
+   {
+      parsing = true;
+   }
+
+   ~ParsingGuard()
+   {
+      parsing = false;
+   }
+};
+
 bool parse_vulkan_present_mode_name(std::string_view name, VkPresentModeKHR& mode) {
    static constexpr std::string_view prefix = "VK_PRESENT_MODE_";
    static constexpr std::string_view suffix = "_KHR";
@@ -915,18 +955,18 @@ static void set_param_defaults(struct overlay_params *params){
    params->font_scale = 1.0f;
    params->wine_color = 0xeb5b5b;
    params->horizontal_separator_color = 0xad64c1;
-   params->gpu_load_color = { 0x39f900, 0xfdfd09, 0xb22222 };
-   params->cpu_load_color = { 0x39f900, 0xfdfd09, 0xb22222 };
+   params->gpu_load_color = { kDefaultGpuLoadColors.begin(), kDefaultGpuLoadColors.end() };
+   params->cpu_load_color = { kDefaultCpuLoadColors.begin(), kDefaultCpuLoadColors.end() };
    params->font_scale_media_player = 0.55f;
    params->log_interval = 0;
    params->media_player_format = { "{title}", "{artist}", "{album}" };
    params->permit_upload = 0;
    params->benchmark_percentiles = { "97", "AVG"};
-   params->gpu_load_value = { 60, 90 };
-   params->cpu_load_value = { 60, 90 };
+   params->gpu_load_value = { kDefaultGpuLoadValues.begin(), kDefaultGpuLoadValues.end() };
+   params->cpu_load_value = { kDefaultCpuLoadValues.begin(), kDefaultCpuLoadValues.end() };
    params->cellpadding_y = -0.085;
-   params->fps_color = { 0xb22222, 0xfdfd09, 0x39f900 };
-   params->fps_value = { 30, 60 };
+   params->fps_color = { kDefaultFpsColors.begin(), kDefaultFpsColors.end() };
+   params->fps_value = { kDefaultFpsValues.begin(), kDefaultFpsValues.end() };
    params->round_corners = 0;
    params->battery_color =0xff9078;
    params->fsr_steam_sharpness = -1;
@@ -983,6 +1023,10 @@ void
 parse_overlay_config(struct overlay_params *params,
                   const char *env, bool use_existing_preset)
 {
+   static bool s_parsing = false;
+   if (s_parsing) return;
+   ParsingGuard parsing_guard(s_parsing);
+
    SPDLOG_DEBUG("Version: {}", MANGOHUD_VERSION);
    std::vector<int> default_preset = {-1, 0, 1, 2, 3, 4};
    auto preset = std::move(params->preset);
@@ -1075,6 +1119,8 @@ parse_overlay_config(struct overlay_params *params,
 
    if (params->font_scale_media_player <= 0.f)
       params->font_scale_media_player = 0.55f;
+
+   ensure_overlay_vector_defaults(params);
 
    // Convert from 0xRRGGBB to ImGui's format
    std::array<unsigned *, 24> colors = {
@@ -1245,8 +1291,10 @@ parse_overlay_config(struct overlay_params *params,
 
    fps_limiter = std::make_unique<fpsLimiter>(params->fps_limit_method ? false : true);
 
-   if (!gpus)
-      gpus = std::make_unique<GPUS>();
+   if (!gpus) {
+      SPDLOG_DEBUG("Creating GPUS from parse_overlay_config");
+      gpus = std::make_unique<GPUS>(params);
+   }
 
    if (params->enabled[OVERLAY_PARAM_ENABLED_legacy_layout]) {
       HUDElements.legacy_elements(get_params().get());
@@ -1256,6 +1304,7 @@ parse_overlay_config(struct overlay_params *params,
          HUDElements.sort_elements(option);
       }
    }
+
 }
 
 std::shared_ptr<overlay_params> get_params() {

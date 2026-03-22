@@ -185,7 +185,8 @@ int main(int argc, char* argv[])
 
     parse_overlay_config(&params, getenv("MANGOHUD_CONFIG"), false);
 
-    gpus = std::make_unique<GPUS>(&params);
+    if (!gpus)
+        gpus = std::make_unique<GPUS>(&params);
 
     init_cpu_stats(params);
 

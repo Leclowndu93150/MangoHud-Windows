@@ -1,5 +1,6 @@
 #include <spdlog/spdlog.h>
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <sstream>
 #include <cmath>
@@ -134,6 +135,43 @@ R format_units(T value, const char*& unit)
     return out_value;
 }
 
+namespace {
+constexpr std::array<unsigned, 3> kDefaultGpuLoadColors = { 0x39f900, 0xfdfd09, 0xb22222 };
+constexpr std::array<unsigned, 3> kDefaultCpuLoadColors = { 0x39f900, 0xfdfd09, 0xb22222 };
+constexpr std::array<unsigned, 3> kDefaultFpsColors = { 0xb22222, 0xfdfd09, 0x39f900 };
+constexpr std::array<unsigned, 2> kDefaultGpuLoadValues = { 60, 90 };
+constexpr std::array<unsigned, 2> kDefaultCpuLoadValues = { 60, 90 };
+constexpr std::array<unsigned, 2> kDefaultFpsValues = { 30, 60 };
+
+template <size_t N>
+std::array<unsigned, N> normalized_unsigned_values(
+    const std::vector<unsigned>& values,
+    const std::array<unsigned, N>& defaults)
+{
+    auto normalized = defaults;
+    const auto count = std::min(values.size(), normalized.size());
+    std::copy_n(values.begin(), count, normalized.begin());
+    return normalized;
+}
+
+LOAD_DATA make_load_data(
+    const std::vector<unsigned>& values,
+    const std::array<unsigned, 2>& defaults,
+    ImVec4 low,
+    ImVec4 med,
+    ImVec4 high)
+{
+    const auto thresholds = normalized_unsigned_values(values, defaults);
+    return LOAD_DATA {
+        low,
+        med,
+        high,
+        thresholds[0],
+        thresholds[1]
+    };
+}
+}
+
 void HudElements::convert_colors(const struct overlay_params& params)
 {
     HUDElements.colors.update = false;
@@ -171,15 +209,18 @@ void HudElements::convert_colors(const struct overlay_params& params)
     HUDElements.colors.wine = convert(params.wine_color);
     HUDElements.colors.horizontal_separator = convert(params.horizontal_separator_color);
     HUDElements.colors.battery = convert(params.battery_color);
-    HUDElements.colors.gpu_load_low = convert(params.gpu_load_color[0]);
-    HUDElements.colors.gpu_load_med = convert(params.gpu_load_color[1]);
-    HUDElements.colors.gpu_load_high = convert(params.gpu_load_color[2]);
-    HUDElements.colors.cpu_load_low = convert(params.cpu_load_color[0]);
-    HUDElements.colors.cpu_load_med = convert(params.cpu_load_color[1]);
-    HUDElements.colors.cpu_load_high = convert(params.cpu_load_color[2]);
-    HUDElements.colors.fps_value_low = convert(params.fps_color[0]);
-    HUDElements.colors.fps_value_med = convert(params.fps_color[1]);
-    HUDElements.colors.fps_value_high = convert(params.fps_color[2]);
+    const auto gpu_load_colors = normalized_unsigned_values(params.gpu_load_color, kDefaultGpuLoadColors);
+    const auto cpu_load_colors = normalized_unsigned_values(params.cpu_load_color, kDefaultCpuLoadColors);
+    const auto fps_colors = normalized_unsigned_values(params.fps_color, kDefaultFpsColors);
+    HUDElements.colors.gpu_load_low = convert(gpu_load_colors[0]);
+    HUDElements.colors.gpu_load_med = convert(gpu_load_colors[1]);
+    HUDElements.colors.gpu_load_high = convert(gpu_load_colors[2]);
+    HUDElements.colors.cpu_load_low = convert(cpu_load_colors[0]);
+    HUDElements.colors.cpu_load_med = convert(cpu_load_colors[1]);
+    HUDElements.colors.cpu_load_high = convert(cpu_load_colors[2]);
+    HUDElements.colors.fps_value_low = convert(fps_colors[0]);
+    HUDElements.colors.fps_value_med = convert(fps_colors[1]);
+    HUDElements.colors.fps_value_high = convert(fps_colors[2]);
     HUDElements.colors.text_outline = convert(params.text_outline_color);
     HUDElements.colors.network = convert(params.network_color);
 
@@ -279,13 +320,12 @@ void HudElements::gpu_stats(){
             ImguiNextColumnOrNewRow();
             auto text_color = HUDElements.colors.text;
             if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_gpu_load_change]){
-                struct LOAD_DATA gpu_data = {
+                auto gpu_data = make_load_data(
+                    HUDElements.params->gpu_load_value,
+                    kDefaultGpuLoadValues,
                     HUDElements.colors.gpu_load_low,
                     HUDElements.colors.gpu_load_med,
-                    HUDElements.colors.gpu_load_high,
-                    HUDElements.params->gpu_load_value[0],
-                    HUDElements.params->gpu_load_value[1]
-                };
+                    HUDElements.colors.gpu_load_high);
 
                 auto load_color = change_on_load_temp(gpu_data, gpu->metrics.load);
                 right_aligned_text(load_color, HUDElements.ralign_width, "%i", gpu->metrics.load);
@@ -421,13 +461,12 @@ void HudElements::cpu_stats(){
         auto text_color = HUDElements.colors.text;
         if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_cpu_load_change]){
             int cpu_load_percent = int(cpuStats.GetCPUDataTotal().percent);
-            struct LOAD_DATA cpu_data = {
+            auto cpu_data = make_load_data(
+                HUDElements.params->cpu_load_value,
+                kDefaultCpuLoadValues,
                 HUDElements.colors.cpu_load_low,
                 HUDElements.colors.cpu_load_med,
-                HUDElements.colors.cpu_load_high,
-                HUDElements.params->cpu_load_value[0],
-                HUDElements.params->cpu_load_value[1]
-            };
+                HUDElements.colors.cpu_load_high);
 
             auto load_color = change_on_load_temp(cpu_data, cpu_load_percent);
             right_aligned_text(load_color, HUDElements.ralign_width, "%d", cpu_load_percent);
@@ -558,13 +597,12 @@ void HudElements::core_load(){
             auto text_color = HUDElements.colors.text;
             if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_core_load_change]){
                 int cpu_load_percent = int(cpuData.percent);
-                struct LOAD_DATA cpu_data = {
+                auto cpu_data = make_load_data(
+                    HUDElements.params->cpu_load_value,
+                    kDefaultCpuLoadValues,
                     HUDElements.colors.cpu_load_low,
                     HUDElements.colors.cpu_load_med,
-                    HUDElements.colors.cpu_load_high,
-                    HUDElements.params->cpu_load_value[0],
-                    HUDElements.params->cpu_load_value[1]
-                };
+                    HUDElements.colors.cpu_load_high);
                 auto load_color = change_on_load_temp(cpu_data, cpu_load_percent);
                 right_aligned_text(load_color, HUDElements.ralign_width, "%d", cpu_load_percent);
                 ImGui::SameLine(0, 1.0f);
@@ -825,13 +863,12 @@ void HudElements::fps(){
         ImguiNextColumnOrNewRow();
         if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_fps_color_change]){
             int fps = int(HUDElements.sw_stats->fps);
-            struct LOAD_DATA fps_data = {
-            HUDElements.colors.fps_value_low,
-            HUDElements.colors.fps_value_med,
-            HUDElements.colors.fps_value_high,
-            HUDElements.params->fps_value[0],
-            HUDElements.params->fps_value[1]
-            };
+            auto fps_data = make_load_data(
+                HUDElements.params->fps_value,
+                kDefaultFpsValues,
+                HUDElements.colors.fps_value_low,
+                HUDElements.colors.fps_value_med,
+                HUDElements.colors.fps_value_high);
             auto load_color = change_on_load_temp(fps_data, fps);
             right_aligned_text(load_color, HUDElements.ralign_width, "%.0f", HUDElements.sw_stats->fps);
         }
@@ -864,13 +901,12 @@ void HudElements::fps_only(){
         auto load_color = HUDElements.colors.text;
         if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_fps_color_change]){
             int fps = int(HUDElements.sw_stats->fps);
-            struct LOAD_DATA fps_data = {
-            HUDElements.colors.fps_value_low,
-            HUDElements.colors.fps_value_med,
-            HUDElements.colors.fps_value_high,
-            HUDElements.params->fps_value[0],
-            HUDElements.params->fps_value[1]
-            };
+            auto fps_data = make_load_data(
+                HUDElements.params->fps_value,
+                kDefaultFpsValues,
+                HUDElements.colors.fps_value_low,
+                HUDElements.colors.fps_value_med,
+                HUDElements.colors.fps_value_high);
             load_color = change_on_load_temp(fps_data, fps);
         }
         HUDElements.TextColored(load_color, "%.0f", HUDElements.sw_stats->fps);
