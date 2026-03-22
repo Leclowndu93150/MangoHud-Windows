@@ -17,7 +17,15 @@ static const GUID DXGI_PROVIDER = {
     { 0xA6, 0xAD, 0xF0, 0x3C, 0xFE, 0xD5, 0xD3, 0xC9 }
 };
 
+// Microsoft-Windows-DxgKrnl provider GUID (more accurate, kernel-level)
+// {802EC45A-1E99-4B83-9920-87C98277BA9D}
+static const GUID DXGKRNL_PROVIDER = {
+    0x802EC45A, 0x1E99, 0x4B83,
+    { 0x99, 0x20, 0x87, 0xC9, 0x82, 0x77, 0xBA, 0x9D }
+};
+
 static const USHORT DXGI_PRESENT_START_ID = 42;
+static const USHORT DXGKRNL_PRESENT_INFO_ID = 0x00b8; // 184
 
 static const wchar_t* SESSION_NAME = L"MangoHudFPSTrace";
 
@@ -40,11 +48,11 @@ static void WINAPI event_callback(PEVENT_RECORD pEvent)
 {
     if (!g_running) return;
 
-    // Filter: only DXGI Present::Start events from our target process
-    if (pEvent->EventHeader.EventDescriptor.Id != DXGI_PRESENT_START_ID)
+    if (pEvent->EventHeader.ProcessId != g_target_pid)
         return;
 
-    if (pEvent->EventHeader.ProcessId != g_target_pid)
+    // Only use DxgKrnl Present::Info events (kernel-level, most accurate)
+    if (pEvent->EventHeader.EventDescriptor.Id != DXGKRNL_PRESENT_INFO_ID)
         return;
 
     LARGE_INTEGER now;
@@ -139,24 +147,22 @@ bool start(DWORD target_pid)
         return false;
     }
 
-    // Enable the DXGI provider on this session
+    // Enable DxgKrnl provider (kernel-level present tracking)
     status = EnableTraceEx2(
         g_session_handle,
-        &DXGI_PROVIDER,
+        &DXGKRNL_PROVIDER,
         EVENT_CONTROL_CODE_ENABLE_PROVIDER,
         TRACE_LEVEL_INFORMATION,
-        0x8000000000000002, // Present keyword
-        0,
-        0,
-        nullptr
+        0x4000000008000001, // Present + Performance keywords
+        0, 0, nullptr
     );
-
     if (status != ERROR_SUCCESS) {
-        SPDLOG_ERROR("ETW: EnableTraceEx2 failed (error {})", status);
+        SPDLOG_ERROR("ETW: EnableTraceEx2 DxgKrnl failed (error {})", status);
         ControlTraceW(g_session_handle, nullptr, props, EVENT_TRACE_CONTROL_STOP);
         free(props);
         return false;
     }
+
 
     free(props);
 

@@ -292,7 +292,9 @@ static HWND create_overlay_window(int x, int y, int w, int h)
 
     if (!hwnd) return nullptr;
 
-    SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), 0, LWA_COLORKEY);
+    // Use a very specific magenta as the transparent color key.
+    // ImGui will never produce this exact color naturally.
+    SetLayeredWindowAttributes(hwnd, RGB(1, 0, 1), 0, LWA_COLORKEY);
 
     MARGINS margins = { -1, -1, -1, -1 };
     DwmExtendFrameIntoClientArea(hwnd, &margins);
@@ -393,12 +395,35 @@ int main(int argc, char* argv[])
 
         check_keybinds(params);
 
-        // Feed real game frametime from ETW into MangoHud's stats
-        uint64_t ft_ns = etw_fps::get_frametime_ns();
-        if (ft_ns > 0) {
-            update_hud_info_with_frametime(g_sw_stats, params, 0, ft_ns);
-        } else {
-            update_hud_info(g_sw_stats, params, 0);
+        // Throttle HW stats updates to ~2x per second (every 500ms)
+        {
+            static DWORD last_hw_update = 0;
+            DWORD now = GetTickCount();
+            if (now - last_hw_update >= 500) {
+                last_hw_update = now;
+                update_hw_info(params, 0);
+            }
+        }
+
+        // Override FPS/frametime with real game data from ETW
+        if (etw_fps::is_running()) {
+            double real_fps = etw_fps::get_fps();
+            uint64_t real_ft = etw_fps::get_frametime_ns();
+            extern float frametime;
+            extern double fps;
+            extern std::vector<float> frametime_data;
+
+            if (real_fps > 0) {
+                g_sw_stats.fps = real_fps;
+                fps = real_fps;
+            }
+            if (real_ft > 0) {
+                float ft_ms = (float)real_ft / 1000000.0f;
+                frametime = ft_ms;
+                frametime_data.push_back(ft_ms);
+                if (frametime_data.size() > 200)
+                    frametime_data.erase(frametime_data.begin());
+            }
         }
 
         if (HUDElements.colors.update)
@@ -439,7 +464,8 @@ int main(int argc, char* argv[])
 
         ImGui::Render();
 
-        float clear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        // Clear to the color key (RGB 1,0,1 = very dark magenta, becomes transparent)
+        float clear[4] = { 1.0f/255.0f, 0.0f, 1.0f/255.0f, 1.0f };
         g_context->OMSetRenderTargets(1, &g_rtv, nullptr);
         g_context->ClearRenderTargetView(g_rtv, clear);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
