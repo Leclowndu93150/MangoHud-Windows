@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: false
 
       - name: Install dependencies
         run: |
@@ -50,7 +50,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: false
+
+      - name: Checkout MangoJuice submodule
+        shell: bash
+        run: git submodule update --init mangojuice
 
       - uses: msys2/setup-msys2@v2
         with:
