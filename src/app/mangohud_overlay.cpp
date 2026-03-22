@@ -227,6 +227,21 @@ static bool track_target_window()
         }
     }
 
+    // Hide overlay if game window is minimized
+    if (IsIconic(target))
+        return false;
+
+    // Hide overlay if game is not the foreground window (user alt-tabbed away)
+    HWND fg = GetForegroundWindow();
+    if (fg != target && fg != g_hwnd) {
+        // Check if the foreground window is a child/popup of the game
+        DWORD fg_pid = 0, target_pid = 0;
+        GetWindowThreadProcessId(fg, &fg_pid);
+        GetWindowThreadProcessId(target, &target_pid);
+        if (fg_pid != target_pid)
+            return false;
+    }
+
     RECT rect;
     if (!GetWindowRect(target, &rect))
         return false;
