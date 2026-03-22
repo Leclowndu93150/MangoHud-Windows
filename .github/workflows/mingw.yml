@@ -1,17 +1,188 @@
-name: Mingw build testing
+name: Build Windows
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
+
 jobs:
-  build-mingw:
+  build-mangohud:
+    name: Build MangoHud (MinGW cross-compile)
     runs-on: ubuntu-latest
-    container:
-      image: archlinux:latest
     steps:
-      - uses: actions/checkout@v3
-      - name: Install prerequisites
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
         run: |
-          pacman -Syu mingw-w64-gcc meson python-mako glslang mingw-w64-headers git --noconfirm
-      - name: configure
-        run: meson setup --cross-file mingw64.txt build64
-      - name: build
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
+            meson ninja-build \
+            glslang-tools \
+            python3-mako
+
+      - name: Configure
+        run: meson setup build64 --cross-file mingw64.txt
+
+      - name: Build
         run: ninja -C build64
+
+      - name: Upload MangoHud artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mangohud-dlls
+          path: |
+            build64/src/dxgi.dll
+            build64/src/libMangoHud.dll
+            build64/src/MangoHud.x86_64.json
+
+  build-mangojuice:
+    name: Build MangoJuice (MSYS2)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gtk4
+            mingw-w64-x86_64-libadwaita
+            mingw-w64-x86_64-vala
+            mingw-w64-x86_64-libgee
+            mingw-w64-x86_64-meson
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-pkg-config
+
+      - name: Build MangoJuice
+        run: |
+          cd mangojuice
+          meson setup build
+          ninja -C build
+
+      - name: Bundle MangoJuice with GTK4 runtime
+        run: |
+          mkdir -p bundle
+          cp mangojuice/build/src/mangojuice.exe bundle/MangoJuice.exe
+
+          # Bundle required DLLs using ldd to find them
+          for dll in $(ldd bundle/MangoJuice.exe | grep mingw64 | awk '{print $3}'); do
+            cp "$dll" bundle/
+          done
+
+          # Bundle GLib schemas
+          mkdir -p bundle/share/glib-2.0/schemas
+          cp /mingw64/share/glib-2.0/schemas/gschemas.compiled bundle/share/glib-2.0/schemas/ 2>/dev/null || true
+
+          # Bundle Adwaita icons
+          mkdir -p bundle/share/icons
+          cp -r /mingw64/share/icons/Adwaita bundle/share/icons/ 2>/dev/null || true
+          cp -r /mingw64/share/icons/hicolor bundle/share/icons/ 2>/dev/null || true
+
+          # Bundle GDK pixbuf loaders
+          mkdir -p bundle/lib/gdk-pixbuf-2.0
+          cp -r /mingw64/lib/gdk-pixbuf-2.0/* bundle/lib/gdk-pixbuf-2.0/ 2>/dev/null || true
+
+          # GTK settings for Windows
+          mkdir -p bundle/etc/gtk-4.0
+          echo '[Settings]' > bundle/etc/gtk-4.0/settings.ini
+          echo 'gtk-theme-name=Adwaita' >> bundle/etc/gtk-4.0/settings.ini
+
+      - name: Upload MangoJuice bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: mangojuice-bundle
+          path: bundle/
+
+  package:
+    name: Package release
+    needs: [build-mangohud, build-mangojuice]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download MangoHud DLLs
+        uses: actions/download-artifact@v4
+        with:
+          name: mangohud-dlls
+          path: release/
+
+      - name: Download MangoJuice bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: mangojuice-bundle
+          path: release/
+
+      - name: Organize release
+        run: |
+          cd release
+          # Flatten MangoHud outputs
+          mv build64/src/dxgi.dll . 2>/dev/null || true
+          mv build64/src/libMangoHud.dll MangoHud.dll 2>/dev/null || true
+          mv build64/src/MangoHud.x86_64.json . 2>/dev/null || true
+          rm -rf build64
+
+          # Copy config examples
+          cp ../data/MangoHud.conf MangoHud.conf.example 2>/dev/null || true
+          cp ../data/presets.conf presets.conf.example 2>/dev/null || true
+
+          # Create readme
+          cat > README.txt << 'ENDREADME'
+          MangoHud for Windows
+          ====================
+
+          Quick start:
+          1. Run MangoJuice.exe
+          2. Go to the Games tab
+          3. Click "Add Game" and pick your game's .exe
+          4. Click "Enable"
+          5. Launch the game - the overlay will appear
+
+          Manual setup:
+          - Copy dxgi.dll next to your game's .exe for DirectX games
+          - For Vulkan games, register MangoHud.x86_64.json as an implicit layer
+
+          Configuration:
+          - Edit MangoHud.conf in %APPDATA%\MangoHud\
+          - Or use MangoJuice.exe for a graphical editor
+          ENDREADME
+
+      - name: Upload final package
+        uses: actions/upload-artifact@v4
+        with:
+          name: MangoHud-Windows-x64
+          path: release/
+
+  release:
+    name: Create GitHub release
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: MangoHud-Windows-x64
+          path: MangoHud-Windows-x64
+
+      - name: Zip release
+        run: cd MangoHud-Windows-x64 && zip -r ../MangoHud-Windows-x64.zip .
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: MangoHud-Windows-x64.zip
+          generate_release_notes: true
