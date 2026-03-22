@@ -122,7 +122,6 @@ HRESULT __stdcall hkResizeBuffers11(IDXGISwapChain* pSwapChain, UINT BufferCount
 
 void impl::d3d11::init()
 {
-    printf("init d3d11\n");
     auto ret = kiero::bind(8, (void**)&oPresent, reinterpret_cast<void*>(hkPresent11));
     assert(ret == kiero::Status::Success);
     ret = kiero::bind(13, (void**)&oResizeBuffers, reinterpret_cast<void*>(hkResizeBuffers11));

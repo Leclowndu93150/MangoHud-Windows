@@ -19,6 +19,7 @@
 #include <cctype>
 #include <array>
 #include <functional>
+#include <new>
 #include <spdlog/spdlog.h>
 #include <vulkan/vulkan_core.h>
 
@@ -960,6 +961,24 @@ static std::string verify_pci_dev(std::string pci_dev) {
    return ss.str();
 }
 
+void reset_overlay_params(struct overlay_params *params)
+{
+   if (!params)
+      return;
+
+   params->~overlay_params();
+   new (params) overlay_params{};
+}
+
+void copy_overlay_params(struct overlay_params *dst, const struct overlay_params *src)
+{
+   if (!dst || !src || dst == src)
+      return;
+
+   dst->~overlay_params();
+   new (dst) overlay_params(*src);
+}
+
 void
 parse_overlay_config(struct overlay_params *params,
                   const char *env, bool use_existing_preset)
@@ -968,7 +987,7 @@ parse_overlay_config(struct overlay_params *params,
    std::vector<int> default_preset = {-1, 0, 1, 2, 3, 4};
    auto preset = std::move(params->preset);
    int transfer_function = params->transfer_function;
-   *params = {};
+   reset_overlay_params(params);
    params->transfer_function = transfer_function;
    params->preset = use_existing_preset ? std::move(preset) : default_preset;
    set_param_defaults(params);

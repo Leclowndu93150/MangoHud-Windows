@@ -31,7 +31,9 @@ static std::string make_pci_dev_string(const DXGI_ADAPTER_DESC& desc) {
 }
 
 GPUS::GPUS(const overlay_params* early_params) {
-    auto params = early_params ? early_params : get_params().get();
+    overlay_params default_params {};
+    auto params_ptr = get_params();
+    auto params = early_params ? early_params : (params_ptr ? params_ptr.get() : &default_params);
 
     IDXGIFactory* factory = nullptr;
     HRESULT hr = CreateDXGIFactory(__uuidof(IDXGIFactory), reinterpret_cast<void**>(&factory));

@@ -16,13 +16,26 @@ NVIDIA::NVIDIA(const char* pciBusId) {
             SPDLOG_ERROR("Nvidia module initialization failed: {}", nvml->nvmlErrorString(result));
             nvml_available = false;
         } else {
-            nvml_available = true; // NVML initialized successfully
+            nvml_available = true;
+            bool got_device = false;
+
             if (pciBusId) {
                 result = nvml->nvmlDeviceGetHandleByPciBusId_v2(pciBusId, &device);
-                if (NVML_SUCCESS != result) {
-                    SPDLOG_ERROR("Getting device handle by PCI bus ID failed: {}", nvml->nvmlErrorString(result));
-                    nvml_available = false; // Revert if getting device handle fails
+                if (NVML_SUCCESS == result)
+                    got_device = true;
+            }
+
+            if (!got_device) {
+                result = nvml->nvmlDeviceGetHandleByIndex_v2(0, &device);
+                if (NVML_SUCCESS == result) {
+                    got_device = true;
+                    SPDLOG_INFO("NVML: using device index 0 (PCI bus ID lookup unavailable)");
                 }
+            }
+
+            if (!got_device) {
+                SPDLOG_ERROR("NVML: could not get device handle");
+                nvml_available = false;
             }
         }
     }

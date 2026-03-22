@@ -158,7 +158,7 @@ mangohud_overlay = executable(
   files('app/mangohud_overlay.cpp'),
   c_args : [pre_args, vulkan_wsi_args],
   cpp_args : [pre_args, vulkan_wsi_args],
-  gui_app : true,
+  gui_app : false,
   link_with: mangohud_static_lib,
   dependencies : [
     mangohud_version_dep,

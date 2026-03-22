@@ -58,6 +58,11 @@ static DWORD WINAPI initOverlayThread(LPVOID) {
 
 static void initOverlayHooks() {
     if (s_hooksInited || s_initFailed) return;
+
+    const char* disable_hooks = getenv("MANGOHUD_DISABLE_DXGI_PROXY_HOOKS");
+    if (disable_hooks && strcmp(disable_hooks, "1") == 0)
+        return;
+
     s_hooksInited = true;
 
     // Do the actual hooking on a background thread so we don't block the game's

@@ -255,7 +255,12 @@ Logger::Logger(const overlay_params* in_params)
     m_logging_on(false),
     m_values_valid(false)
 {
-  if(output_folder.empty()) output_folder = std::getenv("HOME");
+  if (output_folder.empty())
+    output_folder = get_home_dir();
+
+  if (output_folder.empty())
+    output_folder = get_config_dir();
+
   m_log_end = Clock::now() - 15s;
   SPDLOG_DEBUG("Logger constructed!");
 }

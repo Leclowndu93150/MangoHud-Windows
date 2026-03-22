@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <dwmapi.h>
 #include <d3d11.h>
+#include <spdlog/spdlog.h>
 #include <imgui.h>
 #include <implot.h>
 #include "imgui_impl_win32.h"
@@ -30,7 +31,6 @@ static ID3D11RenderTargetView* g_rtv = nullptr;
 static HWND g_hwnd = nullptr;
 static bool g_running = true;
 
-static overlay_params g_params {};
 static swapchain_stats g_sw_stats {};
 static ImVec2 g_window_size;
 static notify_thread g_notifier {};
@@ -158,39 +158,59 @@ static HWND create_overlay_window()
     return hwnd;
 }
 
-int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
+int main(int argc, char* argv[])
 {
+    overlay_params params {};
+
+    // If this EXE lives next to MangoHud's dxgi proxy, keep that proxy in
+    // pure-forwarding mode while the standalone overlay creates its own D3D device.
+    SetEnvironmentVariableA("MANGOHUD_DISABLE_DXGI_PROXY_HOOKS", "1");
+
     // Prevent multiple instances
     HANDLE mutex = CreateMutexW(nullptr, TRUE, L"MangoHudOverlayMutex");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        MessageBoxW(nullptr, L"MangoHud overlay is already running.", L"MangoHud", MB_OK | MB_ICONINFORMATION);
+        CloseHandle(mutex);
         return 0;
     }
 
     init_spdlog();
 
-    // Parse config
-    parse_overlay_config(&g_params, getenv("MANGOHUD_CONFIG"), false);
-    _params = &g_params;
+    // Ensure config dir exists
+    std::string config_dir = get_config_dir();
+    if (!config_dir.empty()) {
+        CreateDirectoryA(config_dir.c_str(), nullptr);
+    }
 
-    // Init monitoring
-    init_cpu_stats(g_params);
-    gpus = std::make_unique<GPUS>(&g_params);
+    _params = &params;
+
+    parse_overlay_config(&params, getenv("MANGOHUD_CONFIG"), false);
+
+    gpus = std::make_unique<GPUS>(&params);
+
+    init_cpu_stats(params);
+
     init_system_info();
 
-    // Start config watcher
-    g_notifier.params = &g_params;
+    g_notifier.params = &params;
     start_notifier(g_notifier);
 
-    // Create overlay window
     g_hwnd = create_overlay_window();
-    if (!g_hwnd) return 1;
+    if (!g_hwnd) {
+        SPDLOG_ERROR("Failed to create overlay window");
+        stop_notifier(g_notifier);
+        CloseHandle(mutex);
+        return 1;
+    }
 
     int sw = GetSystemMetrics(SM_CXSCREEN);
     int sh = GetSystemMetrics(SM_CYSCREEN);
 
     if (!create_d3d(g_hwnd, sw, sh)) {
+        SPDLOG_ERROR("Failed to create D3D11 device");
+        stop_notifier(g_notifier);
         cleanup_d3d();
+        DestroyWindow(g_hwnd);
+        CloseHandle(mutex);
         return 1;
     }
 
@@ -202,15 +222,15 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     io.DisplaySize = ImVec2((float)sw, (float)sh);
 
     ImGui::StyleColorsDark();
-    HUDElements.convert_colors(false, g_params);
+    HUDElements.convert_colors(false, params);
 
     ImGui_ImplWin32_Init(g_hwnd);
     ImGui_ImplDX11_Init(g_device, g_context);
 
-    create_fonts(nullptr, g_params, g_sw_stats.font_small, g_sw_stats.font_text, g_sw_stats.font_secondary);
-    g_sw_stats.font_params_hash = g_params.font_params_hash;
+    create_fonts(nullptr, params, g_sw_stats.font_small, g_sw_stats.font_text, g_sw_stats.font_secondary);
+    g_sw_stats.font_params_hash = params.font_params_hash;
 
-    if (!logger) logger = std::make_unique<Logger>(&g_params);
+    if (!logger) logger = std::make_unique<Logger>(&params);
 
     // Main loop
     MSG msg;
@@ -224,19 +244,19 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         if (!g_running) break;
 
         // Keybinds (toggle visibility, logging, etc)
-        check_keybinds(g_params);
+        check_keybinds(params);
 
         // Update stats
-        update_hud_info(g_sw_stats, g_params, 0);
+        update_hud_info(g_sw_stats, params, 0);
 
         // Hot-reload colors
         if (HUDElements.colors.update)
-            HUDElements.convert_colors(g_params);
+            HUDElements.convert_colors(params);
 
         // Hot-reload fonts
-        if (g_sw_stats.font_params_hash != g_params.font_params_hash) {
-            g_sw_stats.font_params_hash = g_params.font_params_hash;
-            create_fonts(nullptr, g_params, g_sw_stats.font_small, g_sw_stats.font_text, g_sw_stats.font_secondary);
+        if (g_sw_stats.font_params_hash != params.font_params_hash) {
+            g_sw_stats.font_params_hash = params.font_params_hash;
+            create_fonts(nullptr, params, g_sw_stats.font_small, g_sw_stats.font_text, g_sw_stats.font_secondary);
             ImGui_ImplDX11_InvalidateDeviceObjects();
             ImGui_ImplDX11_CreateDeviceObjects();
         }
@@ -251,9 +271,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        overlay_new_frame(g_params);
-        position_layer(g_sw_stats, g_params, g_window_size);
-        render_imgui(g_sw_stats, g_params, g_window_size, false);
+        overlay_new_frame(params);
+        position_layer(g_sw_stats, params, g_window_size);
+        render_imgui(g_sw_stats, params, g_window_size, false);
         overlay_end_frame();
 
         ImGui::Render();

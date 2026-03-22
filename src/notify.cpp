@@ -32,7 +32,7 @@ static void fileChanged(notify_thread *nt) {
                     nt->wd = inotify_add_watch(nt->fd, local_params.config_file_path.c_str(), IN_MODIFY | IN_DELETE_SELF);
                 }
                 std::lock_guard<std::mutex> lk(nt->mutex);
-                *nt->params = local_params;
+                copy_overlay_params(nt->params, &local_params);
             }
         }
         i = 0;

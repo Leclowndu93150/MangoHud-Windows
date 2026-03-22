@@ -21,8 +21,6 @@ static void watchDirectory(notify_thread* nt)
     }
     if (watch_dir.empty()) {
         watch_dir = get_config_dir();
-        if (!watch_dir.empty())
-            watch_dir += "\\MangoHud";
     }
     if (watch_dir.empty()) {
         SPDLOG_ERROR("Config watcher: could not determine config directory");
@@ -64,7 +62,7 @@ static void watchDirectory(notify_thread* nt)
             {
                 std::lock_guard<std::mutex> lk(nt->mutex);
                 if (nt->params)
-                    *nt->params = local_params;
+                    copy_overlay_params(nt->params, &local_params);
             }
 
             // Re-arm the notification

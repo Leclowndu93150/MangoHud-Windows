@@ -399,6 +399,8 @@ const extern char *overlay_param_names[];
 
 void parse_overlay_config(struct overlay_params *params,
                        const char *env, bool ignore_preset);
+void reset_overlay_params(struct overlay_params *params);
+void copy_overlay_params(struct overlay_params *dst, const struct overlay_params *src);
 void presets(int preset, struct overlay_params *params, bool inherit=false);
 bool parse_preset_config(int preset, struct overlay_params *params);
 void add_to_options(struct overlay_params *params, std::string option, std::string value);
