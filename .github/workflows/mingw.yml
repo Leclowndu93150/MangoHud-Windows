@@ -37,6 +37,7 @@ jobs:
         with:
           name: mangohud-dlls
           path: |
+            build64/src/MangoHud.exe
             build64/src/dxgi.dll
             build64/src/libMangoHud.dll
             build64/src/MangoHud.x86_64.json
@@ -136,8 +137,9 @@ jobs:
         run: |
           cd release
           # Flatten MangoHud outputs
+          mv build64/src/MangoHud.exe . 2>/dev/null || true
           mv build64/src/dxgi.dll . 2>/dev/null || true
-          mv build64/src/libMangoHud.dll MangoHud.dll 2>/dev/null || true
+          mv build64/src/libMangoHud.dll MangoHud_vk.dll 2>/dev/null || true
           mv build64/src/MangoHud.x86_64.json . 2>/dev/null || true
           rm -rf build64
 
@@ -150,26 +152,21 @@ jobs:
           MangoHud for Windows
           ====================
 
-          Quick start:
-          1. Run MangoJuice.exe (accept the admin prompt)
-          2. Go to the Games tab
-          3. Click "Register Vulkan Layer" for Vulkan games (CS2, Doom, etc)
-          4. Click "Add Game" and pick your game's .exe
-          5. Click "Enable" for DirectX games
-          6. Launch the game - the overlay will appear
+          Quick start (windowed/borderless games):
+          1. Run MangoHud.exe
+          2. Play your game in windowed or borderless mode
+          3. The overlay appears on top. That's it.
 
-          MangoJuice needs admin to register the Vulkan layer in the
-          Windows Registry. DirectX proxy deployment does not need admin.
+          Or use MangoJuice.exe to configure settings graphically.
 
-          Manual setup:
-          - Copy dxgi.dll next to your game's .exe for DirectX games
-          - For Vulkan: add MangoHud.x86_64.json to
-            HKLM\SOFTWARE\Khronos\Vulkan\ImplicitLayers (DWORD value 0)
-            and set MANGOHUD=1 as a system environment variable
+          Fullscreen mode (WIP):
+          - Copy dxgi.dll next to your game's .exe for DirectX fullscreen
+          - For Vulkan fullscreen: register MangoHud.x86_64.json as
+            an implicit layer in the Windows Registry
 
           Configuration:
           - Edit MangoHud.conf in %APPDATA%\MangoHud\
-          - Or use MangoJuice.exe for a graphical editor
+          - Or use MangoJuice.exe
           ENDREADME
 
       - name: Create zip
@@ -234,8 +231,9 @@ jobs:
       - name: Organize release
         run: |
           cd release
+          mv build64/src/MangoHud.exe . 2>/dev/null || true
           mv build64/src/dxgi.dll . 2>/dev/null || true
-          mv build64/src/libMangoHud.dll MangoHud.dll 2>/dev/null || true
+          mv build64/src/libMangoHud.dll MangoHud_vk.dll 2>/dev/null || true
           mv build64/src/MangoHud.x86_64.json . 2>/dev/null || true
           rm -rf build64
           cp ../data/MangoHud.conf MangoHud.conf.example 2>/dev/null || true

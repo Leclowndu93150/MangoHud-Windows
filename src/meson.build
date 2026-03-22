@@ -150,7 +150,40 @@ configure_file(input : 'mangohud.json.in',
   install_tag : 'runtime',
 )
 
-# DXGI proxy DLL - drop next to game exe for DirectX overlay
+# MangoHud standalone overlay (windowed mode, default)
+dep_dwmapi = cc.find_library('dwmapi', required: true)
+
+mangohud_overlay = executable(
+  'MangoHud',
+  files('app/mangohud_overlay.cpp'),
+  c_args : [pre_args, vulkan_wsi_args],
+  cpp_args : [pre_args, vulkan_wsi_args],
+  gui_app : true,
+  link_with: mangohud_static_lib,
+  dependencies : [
+    mangohud_version_dep,
+    vulkan_wsi_deps,
+    dearimgui_dep,
+    spdlog_dep,
+    dep_dl,
+    dep_rt,
+    dep_pthread,
+    dep_vulkan_headers,
+    dep_vulkan_utility_libraries,
+    windows_deps,
+    implot_dep,
+    dep_d3d11,
+    dep_d3d12,
+    dep_dxgi,
+    dep_psapi,
+    dep_iphlpapi,
+    dep_dwmapi],
+  include_directories : [inc_common],
+  link_args : link_args,
+  install: true,
+)
+
+# DXGI proxy DLL - drop next to game exe for DirectX overlay (fullscreen mode)
 mangohud_proxy = shared_library(
   'dxgi',
   files('proxy/dxgi_proxy.cpp'),
