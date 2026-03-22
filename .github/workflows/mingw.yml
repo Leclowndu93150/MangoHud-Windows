@@ -110,10 +110,13 @@ jobs:
           name: mangojuice-bundle
           path: bundle/
 
-  package:
-    name: Package release
+  package-and-release:
+    name: Package and release
     needs: [build-mangohud, build-mangojuice]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -148,43 +151,98 @@ jobs:
           ====================
 
           Quick start:
-          1. Run MangoJuice.exe
+          1. Run MangoJuice.exe (accept the admin prompt)
           2. Go to the Games tab
-          3. Click "Add Game" and pick your game's .exe
-          4. Click "Enable"
-          5. Launch the game - the overlay will appear
+          3. Click "Register Vulkan Layer" for Vulkan games (CS2, Doom, etc)
+          4. Click "Add Game" and pick your game's .exe
+          5. Click "Enable" for DirectX games
+          6. Launch the game - the overlay will appear
+
+          MangoJuice needs admin to register the Vulkan layer in the
+          Windows Registry. DirectX proxy deployment does not need admin.
 
           Manual setup:
           - Copy dxgi.dll next to your game's .exe for DirectX games
-          - For Vulkan games, register MangoHud.x86_64.json as an implicit layer
+          - For Vulkan: add MangoHud.x86_64.json to
+            HKLM\SOFTWARE\Khronos\Vulkan\ImplicitLayers (DWORD value 0)
+            and set MANGOHUD=1 as a system environment variable
 
           Configuration:
           - Edit MangoHud.conf in %APPDATA%\MangoHud\
           - Or use MangoJuice.exe for a graphical editor
           ENDREADME
 
-      - name: Upload final package
+      - name: Create zip
+        run: cd release && zip -r ../MangoHud-Windows-x64.zip .
+
+      - name: Get short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Delete previous latest release
+        run: gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create rolling release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Latest Build (${{ steps.sha.outputs.short }})"
+          body: |
+            Automatic build from commit ${{ github.sha }}
+
+            **How to use:**
+            1. Download and extract `MangoHud-Windows-x64.zip`
+            2. Run `MangoJuice.exe` (accept admin prompt)
+            3. Go to Games tab, add your games, click Enable
+            4. For Vulkan games (CS2, etc), click "Register Vulkan Layer"
+
+            This release is updated on every push to master.
+          files: MangoHud-Windows-x64.zip
+          prerelease: true
+          make_latest: true
+
+      - name: Upload artifact too
         uses: actions/upload-artifact@v4
         with:
           name: MangoHud-Windows-x64
           path: release/
 
-  release:
-    name: Create GitHub release
-    needs: package
+  tagged-release:
+    name: Create tagged release
+    needs: [build-mangohud, build-mangojuice]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download package
+      - uses: actions/checkout@v4
+
+      - name: Download MangoHud DLLs
         uses: actions/download-artifact@v4
         with:
-          name: MangoHud-Windows-x64
-          path: MangoHud-Windows-x64
+          name: mangohud-dlls
+          path: release/
 
-      - name: Zip release
-        run: cd MangoHud-Windows-x64 && zip -r ../MangoHud-Windows-x64.zip .
+      - name: Download MangoJuice bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: mangojuice-bundle
+          path: release/
+
+      - name: Organize release
+        run: |
+          cd release
+          mv build64/src/dxgi.dll . 2>/dev/null || true
+          mv build64/src/libMangoHud.dll MangoHud.dll 2>/dev/null || true
+          mv build64/src/MangoHud.x86_64.json . 2>/dev/null || true
+          rm -rf build64
+          cp ../data/MangoHud.conf MangoHud.conf.example 2>/dev/null || true
+          cp ../data/presets.conf presets.conf.example 2>/dev/null || true
+
+      - name: Create zip
+        run: cd release && zip -r ../MangoHud-Windows-x64.zip .
 
       - name: Create release
         uses: softprops/action-gh-release@v2
